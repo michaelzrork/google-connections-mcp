@@ -243,6 +243,114 @@ async def get_accomplishment_stats(params: GetStatsInput) -> str:
             "error": str(e)
         }, indent=2)
 
+@mcp.tool(
+    name="delete_accomplishment",
+    annotations={
+        "title": "Delete Accomplishment",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False
+    }
+)
+async def delete_accomplishment(accomplishment_id: str) -> str:
+    """Delete an accomplishment by ID.
+    
+    Args:
+        accomplishment_id: The UUID of the accomplishment to delete
+    
+    Returns:
+        JSON confirmation of deletion
+    """
+    try:
+        client = get_sheets_client()
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
+        
+        # Find the row with this ID (column F)
+        cell = sheet.find(accomplishment_id)
+        if not cell:
+            return json.dumps({
+                "success": False,
+                "error": "Accomplishment not found"
+            }, indent=2)
+        
+        # Delete the row
+        sheet.delete_rows(cell.row)
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Accomplishment {accomplishment_id} deleted successfully"
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        }, indent=2)
+
+
+class EditAccomplishmentInput(BaseModel):
+    """Input for editing an accomplishment."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    accomplishment_id: str = Field(..., min_length=1)
+    description: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    category: Optional[str] = Field(default=None, max_length=50)
+    notes: Optional[str] = Field(default=None, max_length=500)
+
+
+@mcp.tool(
+    name="edit_accomplishment",
+    annotations={
+        "title": "Edit Accomplishment",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False
+    }
+)
+async def edit_accomplishment(params: EditAccomplishmentInput) -> str:
+    """Edit an existing accomplishment.
+    
+    Args:
+        params: Accomplishment ID and fields to update
+    
+    Returns:
+        JSON confirmation of edit
+    """
+    try:
+        client = get_sheets_client()
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
+        
+        # Find the row with this ID
+        cell = sheet.find(params.accomplishment_id)
+        if not cell:
+            return json.dumps({
+                "success": False,
+                "error": "Accomplishment not found"
+            }, indent=2)
+        
+        row_num = cell.row
+        
+        # Update fields if provided
+        if params.category is not None:
+            sheet.update_cell(row_num, 3, params.category)
+        if params.description is not None:
+            sheet.update_cell(row_num, 4, params.description)
+        if params.notes is not None:
+            sheet.update_cell(row_num, 5, params.notes)
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Accomplishment {params.accomplishment_id} updated successfully"
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        }, indent=2)
+
 # Run server with SSE transport
 if __name__ == "__main__":
     import os
