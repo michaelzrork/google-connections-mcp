@@ -243,10 +243,6 @@ async def get_accomplishment_stats(params: GetStatsInput) -> str:
             "error": str(e)
         }, indent=2)
 
-# Run server with HTTP transport
+# Run server
 if __name__ == "__main__":
-    # Get port from environment (Railway sets this)
-    port = int(os.environ.get("PORT", 8000))
-    
-    # Run with HTTP transport
-    mcp.run(transport="sse", port=port, host="0.0.0.0")
+    mcp.run(transport="sse")
