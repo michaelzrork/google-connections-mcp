@@ -720,13 +720,8 @@ def list_calendar_events(
 # ============================================================================
 
 if __name__ == "__main__":
-    from mcp.server.sse import SseServerTransport
-    
     # Get port from environment or default
     port = int(os.environ.get("PORT", 8000))
     
-    # Create SSE transport at root path
-    sse = SseServerTransport("/")
-    
-    # Run the MCP server
-    mcp.run(transport=sse, port=port)
+    # FastMCP has built-in SSE transport - just pass "sse"
+    mcp.run(transport="sse", port=port)
