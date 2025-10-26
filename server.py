@@ -243,8 +243,36 @@ async def get_accomplishment_stats(params: GetStatsInput) -> str:
             "error": str(e)
         }, indent=2)
 
-# Run server
+# Run server with SSE transport
 if __name__ == "__main__":
     import os
+    import uvicorn
+    from mcp.server.sse import SseServerTransport
+    from starlette.applications import Starlette
+    from starlette.routing import Route, Mount
+    
     port = int(os.environ.get("PORT", 8000))
-    mcp.run(transport="sse", port=port)
+    
+    # Create SSE transport
+    sse = SseServerTransport("/messages/")
+    
+    # Define SSE endpoint handler
+    async def handle_sse(request):
+        async with sse.connect_sse(
+            request.scope, request.receive, request._send
+        ) as streams:
+            await mcp._mcp_server.run(
+                streams[0], streams[1],
+                mcp._mcp_server.create_initialization_options()
+            )
+    
+    # Create Starlette app
+    app = Starlette(
+        routes=[
+            Route("/sse", endpoint=handle_sse),
+            Mount("/messages", app=sse.handle_post_message),
+        ]
+    )
+    
+    # Run with uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=port)
