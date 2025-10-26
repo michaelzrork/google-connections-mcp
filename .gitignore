@@ -9,3 +9,4 @@ venv/
 .venv
 credentials.json
 *.log
+desktop.ini
