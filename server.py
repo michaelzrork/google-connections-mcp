@@ -274,7 +274,6 @@ if __name__ == "__main__":
     # Create Starlette app
     app = Starlette(
         routes=[
-            Route("/", endpoint=handle_root),
             Route("/sse", endpoint=handle_sse),
             Mount("/messages", app=sse.handle_post_message),
         ]
