@@ -87,12 +87,12 @@ class WriteSheetInput(BaseModel):
     spreadsheet_id: str = Field(..., min_length=1)
     worksheet_name: str = Field(..., min_length=1)
     range: str = Field(..., min_length=1)
-    values: List[List[Any]] = Field(..., min_items=1)
+    values: List[List[Any]] = Field(..., min_length=1)
 
 class AppendRowsInput(BaseModel):
     spreadsheet_id: str = Field(..., min_length=1)
     worksheet_name: str = Field(..., min_length=1)
-    values: List[List[Any]] = Field(..., min_items=1)
+    values: List[List[Any]] = Field(..., min_length=1)
 
 class CreateWorksheetInput(BaseModel):
     spreadsheet_id: str = Field(..., min_length=1)
@@ -720,18 +720,13 @@ def list_calendar_events(
 # ============================================================================
 
 if __name__ == "__main__":
-    import uvicorn
     from mcp.server.sse import SseServerTransport
     
     # Get port from environment or default
     port = int(os.environ.get("PORT", 8000))
     
-    # Create SSE transport
+    # Create SSE transport at root path
     sse = SseServerTransport("/")
     
-    # Run with uvicorn
-    uvicorn.run(
-        mcp.get_asgi_app(sse),
-        host="0.0.0.0",
-        port=port
-    )
+    # Run the MCP server
+    mcp.run(transport=sse, port=port)
