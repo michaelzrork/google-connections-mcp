@@ -119,7 +119,12 @@ def get_gmail_service():
         raise ValueError("GOOGLE_CREDENTIALS_JSON environment variable not set")
     
     creds_dict = json.loads(creds_json)
-    scopes = ['https://www.googleapis.com/auth/gmail.readonly']
+    scopes = [
+        'https://www.googleapis.com/auth/gmail.readonly',
+        'https://www.googleapis.com/auth/gmail.modify',
+        'https://www.googleapis.com/auth/gmail.compose',
+        'https://www.googleapis.com/auth/gmail.send'
+    ]
     
     creds = GoogleCredentials.from_service_account_info(creds_dict, scopes=scopes)
     service = build('gmail', 'v1', credentials=creds)
@@ -1102,7 +1107,7 @@ async def read_google_slides(presentation_id: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 # ============================================================================
-# GMAIL TOOLS
+# GMAIL TOOLS (READ)
 # ============================================================================
 
 @mcp.tool(name="search_gmail")
@@ -1273,6 +1278,340 @@ async def read_gmail_message(message_id: str) -> str:
             lines.append(f"\n\n... (truncated, {len(body)} total characters)")
         
         return "\n".join(lines)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+# ============================================================================
+# GMAIL TOOLS (WRITE/MODIFY) - NEW!
+# ============================================================================
+
+class MarkEmailReadInput(BaseModel):
+    """Input for marking emails as read."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    message_ids: List[str] = Field(..., min_items=1, description="List of message IDs to mark as read")
+
+@mcp.tool(name="mark_emails_read")
+async def mark_emails_read(params: MarkEmailReadInput) -> str:
+    """Mark one or more emails as read."""
+    try:
+        service = get_gmail_service()
+        
+        # Remove UNREAD label from messages
+        service.users().messages().batchModify(
+            userId='me',
+            body={
+                'ids': params.message_ids,
+                'removeLabelIds': ['UNREAD']
+            }
+        ).execute()
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Marked {len(params.message_ids)} email(s) as read"
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+class MarkEmailUnreadInput(BaseModel):
+    """Input for marking emails as unread."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    message_ids: List[str] = Field(..., min_items=1, description="List of message IDs to mark as unread")
+
+@mcp.tool(name="mark_emails_unread")
+async def mark_emails_unread(params: MarkEmailUnreadInput) -> str:
+    """Mark one or more emails as unread."""
+    try:
+        service = get_gmail_service()
+        
+        # Add UNREAD label to messages
+        service.users().messages().batchModify(
+            userId='me',
+            body={
+                'ids': params.message_ids,
+                'addLabelIds': ['UNREAD']
+            }
+        ).execute()
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Marked {len(params.message_ids)} email(s) as unread"
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+class ArchiveEmailsInput(BaseModel):
+    """Input for archiving emails."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    message_ids: List[str] = Field(..., min_items=1, description="List of message IDs to archive")
+
+@mcp.tool(name="archive_emails")
+async def archive_emails(params: ArchiveEmailsInput) -> str:
+    """Archive one or more emails (remove from INBOX)."""
+    try:
+        service = get_gmail_service()
+        
+        # Remove INBOX label to archive
+        service.users().messages().batchModify(
+            userId='me',
+            body={
+                'ids': params.message_ids,
+                'removeLabelIds': ['INBOX']
+            }
+        ).execute()
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Archived {len(params.message_ids)} email(s)"
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+class UnarchiveEmailsInput(BaseModel):
+    """Input for unarchiving emails."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    message_ids: List[str] = Field(..., min_items=1, description="List of message IDs to unarchive")
+
+@mcp.tool(name="unarchive_emails")
+async def unarchive_emails(params: UnarchiveEmailsInput) -> str:
+    """Unarchive one or more emails (move back to INBOX)."""
+    try:
+        service = get_gmail_service()
+        
+        # Add INBOX label to unarchive
+        service.users().messages().batchModify(
+            userId='me',
+            body={
+                'ids': params.message_ids,
+                'addLabelIds': ['INBOX']
+            }
+        ).execute()
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Unarchived {len(params.message_ids)} email(s)"
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+class DeleteEmailsInput(BaseModel):
+    """Input for deleting emails."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    message_ids: List[str] = Field(..., min_items=1, description="List of message IDs to delete (move to trash)")
+
+@mcp.tool(name="delete_emails")
+async def delete_emails(params: DeleteEmailsInput) -> str:
+    """Delete one or more emails (move to trash)."""
+    try:
+        service = get_gmail_service()
+        
+        # Trash messages
+        service.users().messages().batchModify(
+            userId='me',
+            body={
+                'ids': params.message_ids,
+                'addLabelIds': ['TRASH']
+            }
+        ).execute()
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Deleted {len(params.message_ids)} email(s)"
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+class AddLabelInput(BaseModel):
+    """Input for adding labels to emails."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    message_ids: List[str] = Field(..., min_items=1, description="List of message IDs")
+    label_ids: List[str] = Field(..., min_items=1, description="List of label IDs to add")
+
+@mcp.tool(name="add_labels_to_emails")
+async def add_labels_to_emails(params: AddLabelInput) -> str:
+    """Add labels to one or more emails."""
+    try:
+        service = get_gmail_service()
+        
+        service.users().messages().batchModify(
+            userId='me',
+            body={
+                'ids': params.message_ids,
+                'addLabelIds': params.label_ids
+            }
+        ).execute()
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Added {len(params.label_ids)} label(s) to {len(params.message_ids)} email(s)"
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+class RemoveLabelInput(BaseModel):
+    """Input for removing labels from emails."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    message_ids: List[str] = Field(..., min_items=1, description="List of message IDs")
+    label_ids: List[str] = Field(..., min_items=1, description="List of label IDs to remove")
+
+@mcp.tool(name="remove_labels_from_emails")
+async def remove_labels_from_emails(params: RemoveLabelInput) -> str:
+    """Remove labels from one or more emails."""
+    try:
+        service = get_gmail_service()
+        
+        service.users().messages().batchModify(
+            userId='me',
+            body={
+                'ids': params.message_ids,
+                'removeLabelIds': params.label_ids
+            }
+        ).execute()
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Removed {len(params.label_ids)} label(s) from {len(params.message_ids)} email(s)"
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+@mcp.tool(name="list_gmail_labels")
+async def list_gmail_labels() -> str:
+    """List all available Gmail labels."""
+    try:
+        service = get_gmail_service()
+        
+        results = service.users().labels().list(userId='me').execute()
+        labels = results.get('labels', [])
+        
+        if not labels:
+            return "No labels found."
+        
+        lines = [f"# Gmail Labels ({len(labels)} total)\n"]
+        
+        # Separate system and user labels
+        system_labels = [l for l in labels if l['type'] == 'system']
+        user_labels = [l for l in labels if l['type'] == 'user']
+        
+        if system_labels:
+            lines.append("## System Labels\n")
+            for label in system_labels:
+                lines.append(f"**{label['name']}** - ID: `{label['id']}`")
+        
+        if user_labels:
+            lines.append("\n## Your Custom Labels\n")
+            for label in user_labels:
+                lines.append(f"**{label['name']}** - ID: `{label['id']}`")
+        
+        return "\n".join(lines)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+class SendEmailInput(BaseModel):
+    """Input for sending an email."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    to: str = Field(..., min_length=1, description="Recipient email address")
+    subject: str = Field(..., min_length=1, max_length=200)
+    body: str = Field(..., min_length=1)
+    cc: Optional[str] = Field(default=None, description="CC email address(es), comma-separated")
+    bcc: Optional[str] = Field(default=None, description="BCC email address(es), comma-separated")
+
+@mcp.tool(name="send_email")
+async def send_email(params: SendEmailInput) -> str:
+    """Send an email via Gmail."""
+    try:
+        import base64
+        from email.mime.text import MIMEText
+        
+        service = get_gmail_service()
+        
+        # Create message
+        message = MIMEText(params.body)
+        message['to'] = params.to
+        message['subject'] = params.subject
+        
+        if params.cc:
+            message['cc'] = params.cc
+        if params.bcc:
+            message['bcc'] = params.bcc
+        
+        # Encode message
+        raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
+        
+        # Send message
+        sent_message = service.users().messages().send(
+            userId='me',
+            body={'raw': raw_message}
+        ).execute()
+        
+        return json.dumps({
+            "success": True,
+            "message": "Email sent successfully",
+            "message_id": sent_message['id']
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+class CreateDraftInput(BaseModel):
+    """Input for creating a draft email."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    to: str = Field(..., min_length=1, description="Recipient email address")
+    subject: str = Field(..., min_length=1, max_length=200)
+    body: str = Field(..., min_length=1)
+    cc: Optional[str] = Field(default=None, description="CC email address(es), comma-separated")
+    bcc: Optional[str] = Field(default=None, description="BCC email address(es), comma-separated")
+
+@mcp.tool(name="create_email_draft")
+async def create_email_draft(params: CreateDraftInput) -> str:
+    """Create a draft email in Gmail."""
+    try:
+        import base64
+        from email.mime.text import MIMEText
+        
+        service = get_gmail_service()
+        
+        # Create message
+        message = MIMEText(params.body)
+        message['to'] = params.to
+        message['subject'] = params.subject
+        
+        if params.cc:
+            message['cc'] = params.cc
+        if params.bcc:
+            message['bcc'] = params.bcc
+        
+        # Encode message
+        raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
+        
+        # Create draft
+        draft = service.users().drafts().create(
+            userId='me',
+            body={'message': {'raw': raw_message}}
+        ).execute()
+        
+        return json.dumps({
+            "success": True,
+            "message": "Draft created successfully",
+            "draft_id": draft['id']
+        }, indent=2)
         
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
