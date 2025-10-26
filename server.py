@@ -1,364 +1,292 @@
 #!/usr/bin/env python3
 """
-Comprehensive Google Workspace MCP Server
-Supports: Accomplishments, Google Sheets, and Google Calendar management
+Remote MCP Server for Google Sheets Management
+Full read/write access to Google Sheets with accomplishment tracking
 """
 
 import os
 import json
-import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 from typing import Optional, List, Dict, Any
+from uuid import uuid4
 
+from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, Field, ConfigDict
 import gspread
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from fastmcp import FastMCP
-from pydantic import BaseModel, Field
+from oauth2client.service_account import ServiceAccountCredentials
 
-# Initialize FastMCP server
-mcp = FastMCP("Google Workspace Manager")
+# Initialize MCP server
+mcp = FastMCP("google_sheets_mcp")
 
-# Google API scopes
-SCOPES = [
-    'https://www.googleapis.com/auth/spreadsheets',
-    'https://www.googleapis.com/auth/calendar'
-]
+# Google Sheets setup
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
+SHEET_NAME = "Accomplishments"
 
-# Initialize Google clients
-def get_credentials():
-    """Get credentials from environment variable"""
-    creds_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
+# Initialize Google Sheets client
+def get_sheets_client():
+    """Initialize Google Sheets client with service account credentials."""
+    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
     if not creds_json:
         raise ValueError("GOOGLE_CREDENTIALS_JSON environment variable not set")
     
     creds_dict = json.loads(creds_json)
-    return Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-
-def get_sheets_client():
-    """Get authenticated gspread client"""
-    creds = get_credentials()
-    return gspread.authorize(creds)
-
-def get_calendar_service():
-    """Get authenticated Google Calendar service"""
-    creds = get_credentials()
-    return build('calendar', 'v3', credentials=creds)
-
-def get_spreadsheet():
-    """Get the accomplishments spreadsheet"""
-    spreadsheet_id = os.environ.get('SPREADSHEET_ID')
-    if not spreadsheet_id:
-        raise ValueError("SPREADSHEET_ID environment variable not set")
+    scope = [
+        'https://spreadsheets.google.com/feeds',
+        'https://www.googleapis.com/auth/drive'
+    ]
     
-    client = get_sheets_client()
-    return client.open_by_key(spreadsheet_id)
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    return client
 
-# Pydantic models for validation
+# ============================================================================
+# ACCOMPLISHMENT-SPECIFIC TOOLS
+# ============================================================================
+
 class AddAccomplishmentInput(BaseModel):
+    """Input for adding an accomplishment."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
     description: str = Field(..., min_length=1, max_length=500)
-    category: Optional[str] = Field(None, max_length=50)
-    tags: Optional[str] = Field(None, max_length=200)
-    notes: Optional[str] = Field(None, max_length=500)
-    date_override: Optional[str] = None
+    category: Optional[str] = Field(default=None, max_length=50)
+    tags: Optional[str] = Field(default=None, max_length=200)
+    notes: Optional[str] = Field(default=None, max_length=500)
+    date_override: Optional[str] = Field(default=None)
 
 class ViewAccomplishmentsInput(BaseModel):
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    category: Optional[str] = None
-    limit: Optional[int] = Field(50, ge=1, le=500)
+    """Input for viewing accomplishments."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    start_date: Optional[str] = Field(default=None)
+    end_date: Optional[str] = Field(default=None)
+    category: Optional[str] = Field(default=None)
+    limit: Optional[int] = Field(default=50, ge=1, le=500)
 
 class GetStatsInput(BaseModel):
-    days: Optional[int] = Field(7, ge=1, le=365)
+    """Input for getting statistics."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    days: Optional[int] = Field(default=7, ge=1, le=365)
 
 class EditAccomplishmentInput(BaseModel):
+    """Input for editing an accomplishment."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
     accomplishment_id: str = Field(..., min_length=1)
-    description: Optional[str] = Field(None, min_length=1, max_length=500)
-    category: Optional[str] = Field(None, max_length=50)
-    notes: Optional[str] = Field(None, max_length=500)
+    description: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    category: Optional[str] = Field(default=None, max_length=50)
+    notes: Optional[str] = Field(default=None, max_length=500)
 
-# Google Sheets Models
-class ReadSheetInput(BaseModel):
-    spreadsheet_id: str = Field(..., min_length=1)
-    worksheet_name: str = Field(..., min_length=1)
-    range: Optional[str] = None
-
-class WriteSheetInput(BaseModel):
-    spreadsheet_id: str = Field(..., min_length=1)
-    worksheet_name: str = Field(..., min_length=1)
-    range: str = Field(..., min_length=1)
-    values: List[List[Any]] = Field(..., min_length=1)
-
-class AppendRowsInput(BaseModel):
-    spreadsheet_id: str = Field(..., min_length=1)
-    worksheet_name: str = Field(..., min_length=1)
-    values: List[List[Any]] = Field(..., min_length=1)
-
-class CreateWorksheetInput(BaseModel):
-    spreadsheet_id: str = Field(..., min_length=1)
-    title: str = Field(..., min_length=1)
-    rows: int = Field(1000, ge=1)
-    cols: int = Field(26, ge=1)
-
-class DeleteWorksheetInput(BaseModel):
-    spreadsheet_id: str = Field(..., min_length=1)
-    worksheet_name: str = Field(..., min_length=1)
-
-class ClearRangeInput(BaseModel):
-    spreadsheet_id: str = Field(..., min_length=1)
-    worksheet_name: str = Field(..., min_length=1)
-    range: str = Field(..., min_length=1)
-
-class CopyWorksheetInput(BaseModel):
-    spreadsheet_id: str = Field(..., min_length=1)
-    worksheet_name: str = Field(..., min_length=1)
-    new_title: str = Field(..., min_length=1)
-
-class FormatCellsInput(BaseModel):
-    spreadsheet_id: str = Field(..., min_length=1)
-    worksheet_name: str = Field(..., min_length=1)
-    range: str = Field(..., min_length=1)
-    bold: Optional[bool] = None
-    italic: Optional[bool] = None
-    background_color: Optional[Dict[str, float]] = None
-    text_color: Optional[Dict[str, float]] = None
-
-class SearchSheetsInput(BaseModel):
-    spreadsheet_id: str = Field(..., min_length=1)
-    search_term: str = Field(..., min_length=1)
-    worksheet_name: Optional[str] = None
-
-# Google Calendar Models
-class CreateEventInput(BaseModel):
-    calendar_id: str = Field(default="primary")
-    summary: str = Field(..., min_length=1, max_length=200)
-    start_datetime: str = Field(..., description="ISO format: 2025-10-27T10:00:00-04:00")
-    end_datetime: str = Field(..., description="ISO format: 2025-10-27T11:00:00-04:00")
-    description: Optional[str] = None
-    location: Optional[str] = None
-    attendees: Optional[List[str]] = None
-
-class UpdateEventInput(BaseModel):
-    calendar_id: str = Field(default="primary")
-    event_id: str = Field(..., min_length=1)
-    summary: Optional[str] = Field(None, max_length=200)
-    start_datetime: Optional[str] = None
-    end_datetime: Optional[str] = None
-    description: Optional[str] = None
-    location: Optional[str] = None
-
-class DeleteEventInput(BaseModel):
-    calendar_id: str = Field(default="primary")
-    event_id: str = Field(..., min_length=1)
-
-# ============================================================================
-# ACCOMPLISHMENT TOOLS
-# ============================================================================
-
-@mcp.tool()
-def add_accomplishment(params: AddAccomplishmentInput) -> dict:
+@mcp.tool(name="add_accomplishment")
+async def add_accomplishment(params: AddAccomplishmentInput) -> str:
     """Add a new accomplishment to Google Sheets."""
     try:
-        spreadsheet = get_spreadsheet()
-        worksheet = spreadsheet.worksheet('Accomplishments')
+        client = get_sheets_client()
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
         
-        # Generate unique ID
-        accomplishment_id = str(uuid.uuid4())
+        accomplishment_id = str(uuid4())
+        accomplishment_date = params.date_override or date.today().isoformat()
+        current_time = datetime.now().strftime("%H:%M")
         
-        # Use provided date or today
-        date_str = params.date_override or datetime.now().strftime('%Y-%m-%d')
-        
-        # Prepare row data
-        row = [
-            accomplishment_id,
-            date_str,
+        sheet.append_row([
+            accomplishment_date,
+            current_time,
+            params.category or "",
             params.description,
-            params.category or '',
-            params.tags or '',
-            params.notes or ''
-        ]
+            params.notes or "",
+            accomplishment_id
+        ])
         
-        # Append to sheet
-        worksheet.append_row(row)
-        
-        return {
+        return json.dumps({
             "success": True,
             "message": "Accomplishment added successfully",
             "id": accomplishment_id,
-            "date": date_str,
+            "date": accomplishment_date,
             "description": params.description
-        }
+        }, indent=2)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool()
-def view_accomplishments(params: ViewAccomplishmentsInput) -> dict:
+@mcp.tool(name="view_accomplishments")
+async def view_accomplishments(params: ViewAccomplishmentsInput) -> str:
     """View accomplishments with optional filtering."""
     try:
-        spreadsheet = get_spreadsheet()
-        worksheet = spreadsheet.worksheet('Accomplishments')
+        client = get_sheets_client()
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
+        records = sheet.get_all_records()
         
-        # Get all records
-        records = worksheet.get_all_records()
-        
-        # Apply filters
         filtered = records
         if params.start_date:
-            filtered = [r for r in filtered if r['Date'] >= params.start_date]
+            filtered = [r for r in filtered if r.get('Date', '') >= params.start_date]
         if params.end_date:
-            filtered = [r for r in filtered if r['Date'] <= params.end_date]
+            filtered = [r for r in filtered if r.get('Date', '') <= params.end_date]
         if params.category:
-            filtered = [r for r in filtered if r['Category'] == params.category]
+            filtered = [r for r in filtered if r.get('Category', '') == params.category]
         
-        # Apply limit
+        filtered = sorted(filtered, key=lambda x: x.get('Date', ''), reverse=True)
         filtered = filtered[:params.limit]
         
-        return {
-            "success": True,
-            "count": len(filtered),
-            "accomplishments": filtered
-        }
+        if not filtered:
+            return "No accomplishments found matching your criteria."
+        
+        lines = [f"# Your Accomplishments ({len(filtered)} total)\n"]
+        for acc in filtered:
+            date_str = acc.get('Date', '')
+            cat_str = f" [{acc.get('Category', '')}]" if acc.get('Category') else ""
+            lines.append(f"**{date_str}** - {acc.get('Accomplishment', '')}{cat_str}")
+            if acc.get('Notes'):
+                lines.append(f"  *{acc.get('Notes', '')}*")
+        
+        return "\n".join(lines)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool()
-def get_accomplishment_stats(params: GetStatsInput) -> dict:
+@mcp.tool(name="get_accomplishment_stats")
+async def get_accomplishment_stats(params: GetStatsInput) -> str:
     """Get statistics about accomplishments."""
     try:
-        spreadsheet = get_spreadsheet()
-        worksheet = spreadsheet.worksheet('Accomplishments')
+        client = get_sheets_client()
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
+        records = sheet.get_all_records()
         
-        records = worksheet.get_all_records()
+        end_date = date.today()
+        start_date = end_date - timedelta(days=params.days - 1)
         
-        # Calculate date range
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=params.days)
-        start_str = start_date.strftime('%Y-%m-%d')
+        filtered = [
+            r for r in records
+            if start_date.isoformat() <= r.get('Date', '') <= end_date.isoformat()
+        ]
         
-        # Filter by date range
-        recent = [r for r in records if r['Date'] >= start_str]
-        
-        # Calculate stats
+        total = len(filtered)
         categories = {}
-        for record in recent:
-            cat = record['Category'] or 'Uncategorized'
+        for r in filtered:
+            cat = r.get('Category', 'Uncategorized')
             categories[cat] = categories.get(cat, 0) + 1
         
-        return {
-            "success": True,
-            "period_days": params.days,
-            "total_accomplishments": len(recent),
-            "by_category": categories,
-            "avg_per_day": round(len(recent) / params.days, 2)
-        }
+        lines = [
+            f"# Accomplishment Statistics",
+            f"\n**Period:** Last {params.days} days",
+            f"**Total accomplishments:** {total}",
+            f"\n## By Category:"
+        ]
+        
+        for cat, count in sorted(categories.items(), key=lambda x: x[1], reverse=True):
+            pct = (count / total * 100) if total > 0 else 0
+            lines.append(f"- **{cat}:** {count} ({pct:.1f}%)")
+        
+        return "\n".join(lines)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool()
-def delete_accomplishment(accomplishment_id: str) -> dict:
+@mcp.tool(name="delete_accomplishment")
+async def delete_accomplishment(accomplishment_id: str) -> str:
     """Delete an accomplishment by ID."""
     try:
-        spreadsheet = get_spreadsheet()
-        worksheet = spreadsheet.worksheet('Accomplishments')
+        client = get_sheets_client()
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
         
-        # Find the row
-        cell = worksheet.find(accomplishment_id)
+        cell = sheet.find(accomplishment_id)
         if not cell:
-            return {"success": False, "error": "Accomplishment not found"}
+            return json.dumps({"success": False, "error": "Accomplishment not found"}, indent=2)
         
-        worksheet.delete_rows(cell.row)
+        sheet.delete_rows(cell.row)
         
-        return {
+        return json.dumps({
             "success": True,
-            "message": f"Deleted accomplishment {accomplishment_id}"
-        }
+            "message": f"Accomplishment deleted successfully"
+        }, indent=2)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool()
-def edit_accomplishment(params: EditAccomplishmentInput) -> dict:
+@mcp.tool(name="edit_accomplishment")
+async def edit_accomplishment(params: EditAccomplishmentInput) -> str:
     """Edit an existing accomplishment."""
     try:
-        spreadsheet = get_spreadsheet()
-        worksheet = spreadsheet.worksheet('Accomplishments')
+        client = get_sheets_client()
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
         
-        # Find the row
-        cell = worksheet.find(params.accomplishment_id)
+        cell = sheet.find(params.accomplishment_id)
         if not cell:
-            return {"success": False, "error": "Accomplishment not found"}
+            return json.dumps({"success": False, "error": "Accomplishment not found"}, indent=2)
         
         row_num = cell.row
         
-        # Update fields if provided
-        if params.description:
-            worksheet.update_cell(row_num, 3, params.description)
-        if params.category:
-            worksheet.update_cell(row_num, 4, params.category)
-        if params.notes:
-            worksheet.update_cell(row_num, 6, params.notes)
+        if params.category is not None:
+            sheet.update_cell(row_num, 3, params.category)
+        if params.description is not None:
+            sheet.update_cell(row_num, 4, params.description)
+        if params.notes is not None:
+            sheet.update_cell(row_num, 5, params.notes)
         
-        return {
+        return json.dumps({
             "success": True,
             "message": "Accomplishment updated successfully"
-        }
+        }, indent=2)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 # ============================================================================
-# GOOGLE SHEETS TOOLS
+# GENERAL GOOGLE SHEETS TOOLS
 # ============================================================================
 
-@mcp.tool()
-def list_spreadsheets() -> dict:
+@mcp.tool(name="list_spreadsheets")
+async def list_spreadsheets() -> str:
     """List all spreadsheets accessible to the service account."""
     try:
         client = get_sheets_client()
         spreadsheets = client.openall()
         
-        result = []
-        for sheet in spreadsheets:
-            result.append({
-                "id": sheet.id,
-                "title": sheet.title,
-                "url": sheet.url
-            })
+        if not spreadsheets:
+            return "No spreadsheets found."
         
-        return {
-            "success": True,
-            "count": len(result),
-            "spreadsheets": result
-        }
+        lines = [f"# Your Spreadsheets ({len(spreadsheets)} total)\n"]
+        for sheet in spreadsheets:
+            lines.append(f"**{sheet.title}**")
+            lines.append(f"  ID: `{sheet.id}`")
+            lines.append(f"  URL: {sheet.url}\n")
+        
+        return "\n".join(lines)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool()
-def list_worksheets(spreadsheet_id: str) -> dict:
+@mcp.tool(name="list_worksheets")
+async def list_worksheets(spreadsheet_id: str) -> str:
     """List all worksheets (tabs) in a spreadsheet."""
     try:
         client = get_sheets_client()
         spreadsheet = client.open_by_key(spreadsheet_id)
         worksheets = spreadsheet.worksheets()
         
-        result = []
-        for ws in worksheets:
-            result.append({
-                "id": ws.id,
-                "title": ws.title,
-                "index": ws.index,
-                "rows": ws.row_count,
-                "cols": ws.col_count
-            })
+        if not worksheets:
+            return "No worksheets found."
         
-        return {
-            "success": True,
-            "count": len(result),
-            "worksheets": result
-        }
+        lines = [f"# Worksheets in {spreadsheet.title} ({len(worksheets)} total)\n"]
+        for ws in worksheets:
+            lines.append(f"**{ws.title}**")
+            lines.append(f"  Index: {ws.index}")
+            lines.append(f"  Rows: {ws.row_count}, Columns: {ws.col_count}\n")
+        
+        return "\n".join(lines)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool()
-def read_sheet(params: ReadSheetInput) -> dict:
+class ReadSheetInput(BaseModel):
+    """Input for reading a sheet."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    range: Optional[str] = Field(default=None)
+
+@mcp.tool(name="read_sheet")
+async def read_sheet(params: ReadSheetInput) -> str:
     """Read data from a specific worksheet."""
     try:
         client = get_sheets_client()
@@ -366,20 +294,30 @@ def read_sheet(params: ReadSheetInput) -> dict:
         worksheet = spreadsheet.worksheet(params.worksheet_name)
         
         if params.range:
-            data = worksheet.get(params.range)
+            values = worksheet.get(params.range)
         else:
-            data = worksheet.get_all_values()
+            values = worksheet.get_all_values()
         
-        return {
+        return json.dumps({
             "success": True,
             "worksheet": params.worksheet_name,
-            "data": data
-        }
+            "data": values
+        }, indent=2)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool()
-def write_to_sheet(params: WriteSheetInput) -> dict:
+class WriteSheetInput(BaseModel):
+    """Input for writing to a sheet."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    range: str = Field(..., min_length=1)
+    values: List[List[Any]] = Field(..., min_items=1)
+
+@mcp.tool(name="write_to_sheet")
+async def write_to_sheet(params: WriteSheetInput) -> str:
     """Write data to specific cells/ranges in a worksheet."""
     try:
         client = get_sheets_client()
@@ -388,48 +326,69 @@ def write_to_sheet(params: WriteSheetInput) -> dict:
         
         worksheet.update(params.range, params.values)
         
-        return {
+        return json.dumps({
             "success": True,
             "message": f"Successfully wrote {len(params.values)} rows to {params.range}"
-        }
+        }, indent=2)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool()
-def append_rows(params: AppendRowsInput) -> dict:
+class AppendRowsInput(BaseModel):
+    """Input for appending rows."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    values: List[List[Any]] = Field(..., min_items=1)
+
+@mcp.tool(name="append_rows")
+async def append_rows(params: AppendRowsInput) -> str:
     """Append multiple rows to the end of a worksheet."""
     try:
         client = get_sheets_client()
         spreadsheet = client.open_by_key(params.spreadsheet_id)
         worksheet = spreadsheet.worksheet(params.worksheet_name)
         
-        worksheet.append_rows(params.values)
+        for row in params.values:
+            worksheet.append_row(row)
         
-        return {
+        return json.dumps({
             "success": True,
             "message": f"Successfully appended {len(params.values)} rows"
-        }
+        }, indent=2)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool()
-def create_spreadsheet(title: str) -> dict:
+@mcp.tool(name="create_spreadsheet")
+async def create_spreadsheet(title: str) -> str:
     """Create a new spreadsheet."""
     try:
         client = get_sheets_client()
         spreadsheet = client.create(title)
         
-        return {
+        return json.dumps({
             "success": True,
+            "message": f"Created spreadsheet: {title}",
             "id": spreadsheet.id,
-            "title": spreadsheet.title,
             "url": spreadsheet.url
-        }
+        }, indent=2)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool()
-def create_worksheet(params: CreateWorksheetInput) -> dict:
+class CreateWorksheetInput(BaseModel):
+    """Input for creating a worksheet."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    spreadsheet_id: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1)
+    rows: int = Field(default=1000, ge=1)
+    cols: int = Field(default=26, ge=1)
+
+@mcp.tool(name="create_worksheet")
+async def create_worksheet(params: CreateWorksheetInput) -> str:
     """Create a new worksheet (tab) in an existing spreadsheet."""
     try:
         client = get_sheets_client()
@@ -441,16 +400,24 @@ def create_worksheet(params: CreateWorksheetInput) -> dict:
             cols=params.cols
         )
         
-        return {
+        return json.dumps({
             "success": True,
             "message": f"Created worksheet: {params.title}",
             "worksheet_id": worksheet.id
-        }
+        }, indent=2)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool()
-def delete_worksheet(params: DeleteWorksheetInput) -> dict:
+class DeleteWorksheetInput(BaseModel):
+    """Input for deleting a worksheet."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+
+@mcp.tool(name="delete_worksheet")
+async def delete_worksheet(params: DeleteWorksheetInput) -> str:
     """Delete a worksheet (tab) from a spreadsheet."""
     try:
         client = get_sheets_client()
@@ -459,15 +426,24 @@ def delete_worksheet(params: DeleteWorksheetInput) -> dict:
         
         spreadsheet.del_worksheet(worksheet)
         
-        return {
+        return json.dumps({
             "success": True,
             "message": f"Deleted worksheet: {params.worksheet_name}"
-        }
+        }, indent=2)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool()
-def clear_range(params: ClearRangeInput) -> dict:
+class ClearRangeInput(BaseModel):
+    """Input for clearing a range."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    range: str = Field(..., min_length=1)
+
+@mcp.tool(name="clear_range")
+async def clear_range(params: ClearRangeInput) -> str:
     """Clear data from a specific range in a worksheet."""
     try:
         client = get_sheets_client()
@@ -476,15 +452,24 @@ def clear_range(params: ClearRangeInput) -> dict:
         
         worksheet.batch_clear([params.range])
         
-        return {
+        return json.dumps({
             "success": True,
             "message": f"Cleared range: {params.range}"
-        }
+        }, indent=2)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool()
-def copy_worksheet(params: CopyWorksheetInput) -> dict:
+class CopyWorksheetInput(BaseModel):
+    """Input for copying a worksheet."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    new_title: str = Field(..., min_length=1)
+
+@mcp.tool(name="copy_worksheet")
+async def copy_worksheet(params: CopyWorksheetInput) -> str:
     """Duplicate a worksheet within the same spreadsheet."""
     try:
         client = get_sheets_client()
@@ -493,235 +478,141 @@ def copy_worksheet(params: CopyWorksheetInput) -> dict:
         
         new_worksheet = worksheet.duplicate(new_sheet_name=params.new_title)
         
-        return {
+        return json.dumps({
             "success": True,
             "message": f"Copied worksheet to: {params.new_title}",
-            "new_worksheet_id": new_worksheet.id
-        }
+            "worksheet_id": new_worksheet.id
+        }, indent=2)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool()
-def format_cells(params: FormatCellsInput) -> dict:
+class FormatCellsInput(BaseModel):
+    """Input for formatting cells."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    range: str = Field(..., min_length=1)
+    bold: Optional[bool] = Field(default=None)
+    italic: Optional[bool] = Field(default=None)
+    background_color: Optional[Dict[str, float]] = Field(default=None)
+    text_color: Optional[Dict[str, float]] = Field(default=None)
+
+@mcp.tool(name="format_cells")
+async def format_cells(params: FormatCellsInput) -> str:
     """Apply formatting to cells (bold, italic, colors)."""
     try:
         client = get_sheets_client()
         spreadsheet = client.open_by_key(params.spreadsheet_id)
         worksheet = spreadsheet.worksheet(params.worksheet_name)
         
-        # Build format object
-        fmt = {}
+        format_dict = {}
+        
         if params.bold is not None or params.italic is not None:
-            fmt['textFormat'] = {}
+            text_format = {}
             if params.bold is not None:
-                fmt['textFormat']['bold'] = params.bold
+                text_format['bold'] = params.bold
             if params.italic is not None:
-                fmt['textFormat']['italic'] = params.italic
+                text_format['italic'] = params.italic
+            format_dict['textFormat'] = text_format
         
         if params.background_color:
-            fmt['backgroundColor'] = params.background_color
+            format_dict['backgroundColor'] = params.background_color
+        
         if params.text_color:
-            fmt['textFormat'] = fmt.get('textFormat', {})
-            fmt['textFormat']['foregroundColor'] = params.text_color
+            if 'textFormat' not in format_dict:
+                format_dict['textFormat'] = {}
+            format_dict['textFormat']['foregroundColor'] = params.text_color
         
-        worksheet.format(params.range, fmt)
+        worksheet.format(params.range, format_dict)
         
-        return {
+        return json.dumps({
             "success": True,
             "message": f"Applied formatting to range: {params.range}"
-        }
+        }, indent=2)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool()
-def search_sheets(params: SearchSheetsInput) -> dict:
+class SearchSheetsInput(BaseModel):
+    """Input for searching sheets."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    spreadsheet_id: str = Field(..., min_length=1)
+    search_term: str = Field(..., min_length=1)
+    worksheet_name: Optional[str] = Field(default=None)
+
+@mcp.tool(name="search_sheets")
+async def search_sheets(params: SearchSheetsInput) -> str:
     """Search for data across worksheets in a spreadsheet."""
     try:
         client = get_sheets_client()
         spreadsheet = client.open_by_key(params.spreadsheet_id)
         
+        if params.worksheet_name:
+            worksheets = [spreadsheet.worksheet(params.worksheet_name)]
+        else:
+            worksheets = spreadsheet.worksheets()
+        
         results = []
-        worksheets = [spreadsheet.worksheet(params.worksheet_name)] if params.worksheet_name else spreadsheet.worksheets()
+        for worksheet in worksheets:
+            try:
+                cells = worksheet.findall(params.search_term)
+                for cell in cells:
+                    results.append({
+                        "worksheet": worksheet.title,
+                        "cell": cell.address,
+                        "value": cell.value,
+                        "row": cell.row,
+                        "col": cell.col
+                    })
+            except:
+                continue
         
-        for ws in worksheets:
-            cells = ws.findall(params.search_term)
-            for cell in cells:
-                results.append({
-                    "worksheet": ws.title,
-                    "row": cell.row,
-                    "col": cell.col,
-                    "value": cell.value
-                })
+        if not results:
+            return f"No matches found for '{params.search_term}'"
         
-        return {
-            "success": True,
-            "count": len(results),
-            "results": results
-        }
+        lines = [f"# Search Results for '{params.search_term}' ({len(results)} matches)\n"]
+        for result in results:
+            lines.append(f"**{result['worksheet']}** - Cell {result['cell']}")
+            lines.append(f"  Value: {result['value']}\n")
+        
+        return "\n".join(lines)
+        
     except Exception as e:
-        return {"success": False, "error": str(e)}
-
-# ============================================================================
-# GOOGLE CALENDAR TOOLS
-# ============================================================================
-
-@mcp.tool()
-def create_calendar_event(params: CreateEventInput) -> dict:
-    """Create a new calendar event."""
-    try:
-        service = get_calendar_service()
-        
-        event = {
-            'summary': params.summary,
-            'start': {
-                'dateTime': params.start_datetime,
-                'timeZone': 'America/New_York',
-            },
-            'end': {
-                'dateTime': params.end_datetime,
-                'timeZone': 'America/New_York',
-            }
-        }
-        
-        if params.description:
-            event['description'] = params.description
-        if params.location:
-            event['location'] = params.location
-        if params.attendees:
-            event['attendees'] = [{'email': email} for email in params.attendees]
-        
-        created_event = service.events().insert(
-            calendarId=params.calendar_id,
-            body=event
-        ).execute()
-        
-        return {
-            "success": True,
-            "message": "Event created successfully",
-            "event_id": created_event['id'],
-            "html_link": created_event.get('htmlLink'),
-            "summary": created_event['summary']
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@mcp.tool()
-def update_calendar_event(params: UpdateEventInput) -> dict:
-    """Update an existing calendar event."""
-    try:
-        service = get_calendar_service()
-        
-        # Get existing event
-        event = service.events().get(
-            calendarId=params.calendar_id,
-            eventId=params.event_id
-        ).execute()
-        
-        # Update fields if provided
-        if params.summary:
-            event['summary'] = params.summary
-        if params.description:
-            event['description'] = params.description
-        if params.location:
-            event['location'] = params.location
-        if params.start_datetime:
-            event['start'] = {
-                'dateTime': params.start_datetime,
-                'timeZone': 'America/New_York'
-            }
-        if params.end_datetime:
-            event['end'] = {
-                'dateTime': params.end_datetime,
-                'timeZone': 'America/New_York'
-            }
-        
-        updated_event = service.events().update(
-            calendarId=params.calendar_id,
-            eventId=params.event_id,
-            body=event
-        ).execute()
-        
-        return {
-            "success": True,
-            "message": "Event updated successfully",
-            "event_id": updated_event['id'],
-            "summary": updated_event['summary']
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@mcp.tool()
-def delete_calendar_event(params: DeleteEventInput) -> dict:
-    """Delete a calendar event."""
-    try:
-        service = get_calendar_service()
-        
-        service.events().delete(
-            calendarId=params.calendar_id,
-            eventId=params.event_id
-        ).execute()
-        
-        return {
-            "success": True,
-            "message": f"Event {params.event_id} deleted successfully"
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-@mcp.tool()
-def list_calendar_events(
-    calendar_id: str = "primary",
-    time_min: Optional[str] = None,
-    time_max: Optional[str] = None,
-    max_results: int = 10
-) -> dict:
-    """List calendar events within a time range."""
-    try:
-        service = get_calendar_service()
-        
-        # Default to today if no time range specified
-        if not time_min:
-            time_min = datetime.now().replace(hour=0, minute=0, second=0).isoformat() + '-04:00'
-        if not time_max:
-            time_max = (datetime.now() + timedelta(days=7)).isoformat() + '-04:00'
-        
-        events_result = service.events().list(
-            calendarId=calendar_id,
-            timeMin=time_min,
-            timeMax=time_max,
-            maxResults=max_results,
-            singleEvents=True,
-            orderBy='startTime'
-        ).execute()
-        
-        events = events_result.get('items', [])
-        
-        formatted_events = []
-        for event in events:
-            formatted_events.append({
-                'id': event['id'],
-                'summary': event.get('summary', 'No title'),
-                'start': event['start'].get('dateTime', event['start'].get('date')),
-                'end': event['end'].get('dateTime', event['end'].get('date')),
-                'location': event.get('location'),
-                'description': event.get('description')
-            })
-        
-        return {
-            "success": True,
-            "count": len(formatted_events),
-            "events": formatted_events
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 # ============================================================================
 # SERVER STARTUP
 # ============================================================================
 
 if __name__ == "__main__":
-    # Get port from environment or default
+    import uvicorn
+    from mcp.server.sse import SseServerTransport
+    from starlette.applications import Starlette
+    from starlette.routing import Route, Mount
+    from starlette.responses import Response
+    
     port = int(os.environ.get("PORT", 8000))
     
-    # FastMCP has built-in SSE transport - just pass "sse"
-    mcp.run(transport="sse", port=port)
+    sse = SseServerTransport("/messages/")
+    
+    async def handle_sse(request):
+        async with sse.connect_sse(
+            request.scope, request.receive, request._send
+        ) as streams:
+            await mcp._mcp_server.run(
+                streams[0], streams[1],
+                mcp._mcp_server.create_initialization_options()
+            )
+        return Response()
+    
+    app = Starlette(
+        routes=[
+            Route("/", endpoint=handle_sse, methods=["GET"]),
+            Mount("/messages", app=sse.handle_post_message),
+        ]
+    )
+    
+    uvicorn.run(app, host="0.0.0.0", port=port)
