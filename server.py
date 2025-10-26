@@ -257,14 +257,17 @@ if __name__ == "__main__":
     sse = SseServerTransport("/messages/")
     
     # Define SSE endpoint handler
-    async def handle_sse(request):
-        async with sse.connect_sse(
-            request.scope, request.receive, request._send
-        ) as streams:
-            await mcp._mcp_server.run(
-                streams[0], streams[1],
-                mcp._mcp_server.create_initialization_options()
-            )
+from starlette.responses import Response
+
+async def handle_sse(request):
+    async with sse.connect_sse(
+        request.scope, request.receive, request._send
+    ) as streams:
+        await mcp._mcp_server.run(
+            streams[0], streams[1],
+            mcp._mcp_server.create_initialization_options()
+        )
+    return Response()
     
     # Create Starlette app
     app = Starlette(
