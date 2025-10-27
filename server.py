@@ -19,7 +19,7 @@ from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials as GoogleCredentials
 
 # Initialize MCP server
-mcp = FastMCP("google_sheets_mcp")
+mcp = FastMCP("Daily Tracking")
 
 # Google Sheets setup
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
@@ -146,196 +146,9 @@ def get_keep_service():
     return service
 
 # ============================================================================
-# ACCOMPLISHMENT-SPECIFIC TOOLS
+# GENERAL GOOGLE SHEETS TOOLS
 # ============================================================================
 
-class AddAccomplishmentInput(BaseModel):
-    """Input for adding an accomplishment."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    description: str = Field(..., min_length=1, max_length=500)
-    category: Optional[str] = Field(default=None, max_length=50)
-    tags: Optional[str] = Field(default=None, max_length=200)
-    notes: Optional[str] = Field(default=None, max_length=500)
-    date_override: Optional[str] = Field(default=None)
-
-class ViewAccomplishmentsInput(BaseModel):
-    """Input for viewing accomplishments."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    start_date: Optional[str] = Field(default=None)
-    end_date: Optional[str] = Field(default=None)
-    category: Optional[str] = Field(default=None)
-    limit: Optional[int] = Field(default=50, ge=1, le=500)
-
-class GetStatsInput(BaseModel):
-    """Input for getting statistics."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    days: Optional[int] = Field(default=7, ge=1, le=365)
-
-class EditAccomplishmentInput(BaseModel):
-    """Input for editing an accomplishment."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    accomplishment_id: str = Field(..., min_length=1)
-    description: Optional[str] = Field(default=None, min_length=1, max_length=500)
-    category: Optional[str] = Field(default=None, max_length=50)
-    notes: Optional[str] = Field(default=None, max_length=500)
-
-@mcp.tool(name="add_accomplishment")
-async def add_accomplishment(params: AddAccomplishmentInput) -> str:
-    """Add a new accomplishment to Google Sheets."""
-    try:
-        client = get_sheets_client()
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
-        
-        accomplishment_id = str(uuid4())
-        accomplishment_date = params.date_override or date.today().isoformat()
-        current_time = datetime.now().strftime("%H:%M")
-        
-        sheet.append_row([
-            accomplishment_date,
-            current_time,
-            params.category or "",
-            params.description,
-            params.notes or "",
-            accomplishment_id
-        ])
-        
-        return json.dumps({
-            "success": True,
-            "message": "Accomplishment added successfully",
-            "id": accomplishment_id,
-            "date": accomplishment_date,
-            "description": params.description
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-@mcp.tool(name="view_accomplishments")
-async def view_accomplishments(params: ViewAccomplishmentsInput) -> str:
-    """View accomplishments with optional filtering."""
-    try:
-        client = get_sheets_client()
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
-        records = sheet.get_all_records()
-        
-        filtered = records
-        if params.start_date:
-            filtered = [r for r in filtered if r.get('Date', '') >= params.start_date]
-        if params.end_date:
-            filtered = [r for r in filtered if r.get('Date', '') <= params.end_date]
-        if params.category:
-            filtered = [r for r in filtered if r.get('Category', '') == params.category]
-        
-        filtered = sorted(filtered, key=lambda x: x.get('Date', ''), reverse=True)
-        filtered = filtered[:params.limit]
-        
-        if not filtered:
-            return "No accomplishments found matching your criteria."
-        
-        lines = [f"# Your Accomplishments ({len(filtered)} total)\n"]
-        for acc in filtered:
-            date_str = acc.get('Date', '')
-            cat_str = f" [{acc.get('Category', '')}]" if acc.get('Category') else ""
-            lines.append(f"**{date_str}** - {acc.get('Accomplishment', '')}{cat_str}")
-            if acc.get('Notes'):
-                lines.append(f"  *{acc.get('Notes', '')}*")
-        
-        return "\n".join(lines)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-@mcp.tool(name="get_accomplishment_stats")
-async def get_accomplishment_stats(params: GetStatsInput) -> str:
-    """Get statistics about accomplishments."""
-    try:
-        client = get_sheets_client()
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
-        records = sheet.get_all_records()
-        
-        end_date = date.today()
-        start_date = end_date - timedelta(days=params.days - 1)
-        
-        filtered = [
-            r for r in records
-            if start_date.isoformat() <= r.get('Date', '') <= end_date.isoformat()
-        ]
-        
-        total = len(filtered)
-        categories = {}
-        for r in filtered:
-            cat = r.get('Category', 'Uncategorized')
-            categories[cat] = categories.get(cat, 0) + 1
-        
-        lines = [
-            f"# Accomplishment Statistics",
-            f"\n**Period:** Last {params.days} days",
-            f"**Total accomplishments:** {total}",
-            f"\n## By Category:"
-        ]
-        
-        for cat, count in sorted(categories.items(), key=lambda x: x[1], reverse=True):
-            pct = (count / total * 100) if total > 0 else 0
-            lines.append(f"- **{cat}:** {count} ({pct:.1f}%)")
-        
-        return "\n".join(lines)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-@mcp.tool(name="delete_accomplishment")
-async def delete_accomplishment(accomplishment_id: str) -> str:
-    """Delete an accomplishment by ID."""
-    try:
-        client = get_sheets_client()
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
-        
-        cell = sheet.find(accomplishment_id)
-        if not cell:
-            return json.dumps({"success": False, "error": "Accomplishment not found"}, indent=2)
-        
-        sheet.delete_rows(cell.row)
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Accomplishment deleted successfully"
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-@mcp.tool(name="edit_accomplishment")
-async def edit_accomplishment(params: EditAccomplishmentInput) -> str:
-    """Edit an existing accomplishment."""
-    try:
-        client = get_sheets_client()
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
-        
-        cell = sheet.find(params.accomplishment_id)
-        if not cell:
-            return json.dumps({"success": False, "error": "Accomplishment not found"}, indent=2)
-        
-        row_num = cell.row
-        
-        if params.category is not None:
-            sheet.update_cell(row_num, 3, params.category)
-        if params.description is not None:
-            sheet.update_cell(row_num, 4, params.description)
-        if params.notes is not None:
-            sheet.update_cell(row_num, 5, params.notes)
-        
-        return json.dumps({
-            "success": True,
-            "message": "Accomplishment updated successfully"
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-    
 @mcp.tool()
 async def export_sheet_as_csv(
     spreadsheet_id: str,
@@ -353,6 +166,9 @@ async def export_sheet_as_csv(
         Success message with file path
     """
     try:
+        # ADD THIS LINE:
+        client = get_sheets_client()
+        
         # Get the worksheet
         spreadsheet = client.open_by_key(spreadsheet_id)
         worksheet = spreadsheet.worksheet(worksheet_name)
@@ -370,11 +186,7 @@ async def export_sheet_as_csv(
     
     except Exception as e:
         return f"Error exporting sheet: {str(e)}"
-
-# ============================================================================
-# GENERAL GOOGLE SHEETS TOOLS
-# ============================================================================
-
+    
 @mcp.tool(name="list_spreadsheets")
 async def list_spreadsheets() -> str:
     """List all spreadsheets accessible to the service account."""
