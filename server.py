@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Remote MCP Server for Google Sheets and Calendar Management
-Full read/write access to Google Sheets with accomplishment tracking and Calendar management
+Remote MCP Server for Google Sheets and Google Workspace Tools  
+Full read/write access to Google Sheets, Calendar, Tasks, Drive, Docs, Slides, Gmail, and Keep.
 """
 
 import os
@@ -9,7 +9,6 @@ import json
 import csv
 from datetime import datetime, date, timedelta
 from typing import Optional, List, Dict, Any
-from uuid import uuid4
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field, ConfigDict
@@ -23,7 +22,6 @@ mcp = FastMCP("Daily Tracking")
 
 # Google Sheets setup
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
-SHEET_NAME = "Accomplishments"
 
 # Initialize Google Sheets client
 def get_sheets_client():
