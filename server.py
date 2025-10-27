@@ -265,7 +265,7 @@ class WriteSheetInput(BaseModel):
     spreadsheet_id: str = Field(..., min_length=1)
     worksheet_name: str = Field(..., min_length=1)
     range: str = Field(..., min_length=1)
-    values: List[List[Any]] = Field(..., min_items=1)
+    values: List[List[Any]] = Field(..., min_length=1)
 
 @mcp.tool(name="write_to_sheet")
 async def write_to_sheet(params: WriteSheetInput) -> str:
@@ -291,7 +291,7 @@ class AppendRowsInput(BaseModel):
     
     spreadsheet_id: str = Field(..., min_length=1)
     worksheet_name: str = Field(..., min_length=1)
-    values: List[List[Any]] = Field(..., min_items=1)
+    values: List[List[Any]] = Field(..., min_length=1)
 
 @mcp.tool(name="append_rows")
 async def append_rows(params: AppendRowsInput) -> str:
@@ -1136,7 +1136,7 @@ class MarkEmailReadInput(BaseModel):
     """Input for marking emails as read."""
     model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
     
-    message_ids: List[str] = Field(..., min_items=1, description="List of message IDs to mark as read")
+    message_ids: List[str] = Field(..., min_length=1, description="List of message IDs to mark as read")
 
 @mcp.tool(name="mark_emails_read")
 async def mark_emails_read(params: MarkEmailReadInput) -> str:
@@ -1165,7 +1165,7 @@ class MarkEmailUnreadInput(BaseModel):
     """Input for marking emails as unread."""
     model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
     
-    message_ids: List[str] = Field(..., min_items=1, description="List of message IDs to mark as unread")
+    message_ids: List[str] = Field(..., min_length=1, description="List of message IDs to mark as unread")
 
 @mcp.tool(name="mark_emails_unread")
 async def mark_emails_unread(params: MarkEmailUnreadInput) -> str:
@@ -1194,7 +1194,7 @@ class ArchiveEmailsInput(BaseModel):
     """Input for archiving emails."""
     model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
     
-    message_ids: List[str] = Field(..., min_items=1, description="List of message IDs to archive")
+    message_ids: List[str] = Field(..., min_length=1, description="List of message IDs to archive")
 
 @mcp.tool(name="archive_emails")
 async def archive_emails(params: ArchiveEmailsInput) -> str:
@@ -1223,7 +1223,7 @@ class UnarchiveEmailsInput(BaseModel):
     """Input for unarchiving emails."""
     model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
     
-    message_ids: List[str] = Field(..., min_items=1, description="List of message IDs to unarchive")
+    message_ids: List[str] = Field(..., min_length=1, description="List of message IDs to unarchive")
 
 @mcp.tool(name="unarchive_emails")
 async def unarchive_emails(params: UnarchiveEmailsInput) -> str:
@@ -1252,7 +1252,7 @@ class DeleteEmailsInput(BaseModel):
     """Input for deleting emails."""
     model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
     
-    message_ids: List[str] = Field(..., min_items=1, description="List of message IDs to delete (move to trash)")
+    message_ids: List[str] = Field(..., min_length=1, description="List of message IDs to delete (move to trash)")
 
 @mcp.tool(name="delete_emails")
 async def delete_emails(params: DeleteEmailsInput) -> str:
@@ -1281,8 +1281,8 @@ class AddLabelInput(BaseModel):
     """Input for adding labels to emails."""
     model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
     
-    message_ids: List[str] = Field(..., min_items=1, description="List of message IDs")
-    label_ids: List[str] = Field(..., min_items=1, description="List of label IDs to add")
+    message_ids: List[str] = Field(..., min_length=1, description="List of message IDs")
+    label_ids: List[str] = Field(..., min_length=1, description="List of label IDs to add")
 
 @mcp.tool(name="add_labels_to_emails")
 async def add_labels_to_emails(params: AddLabelInput) -> str:
@@ -1310,8 +1310,8 @@ class RemoveLabelInput(BaseModel):
     """Input for removing labels from emails."""
     model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
     
-    message_ids: List[str] = Field(..., min_items=1, description="List of message IDs")
-    label_ids: List[str] = Field(..., min_items=1, description="List of label IDs to remove")
+    message_ids: List[str] = Field(..., min_length=1, description="List of message IDs")
+    label_ids: List[str] = Field(..., min_length=1, description="List of label IDs to remove")
 
 @mcp.tool(name="remove_labels_from_emails")
 async def remove_labels_from_emails(params: RemoveLabelInput) -> str:
