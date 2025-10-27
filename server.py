@@ -6,6 +6,7 @@ Full read/write access to Google Sheets with accomplishment tracking and Calenda
 
 import os
 import json
+import csv
 from datetime import datetime, date, timedelta
 from typing import Optional, List, Dict, Any
 from uuid import uuid4
@@ -334,6 +335,41 @@ async def edit_accomplishment(params: EditAccomplishmentInput) -> str:
         
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
+    
+@mcp.tool()
+async def export_sheet_as_csv(
+    spreadsheet_id: str,
+    worksheet_name: str,
+    output_path: str) -> str:
+    """
+    Export a Google Sheet worksheet as CSV to a file path.
+    
+    Args:
+        spreadsheet_id: The ID of the spreadsheet
+        worksheet_name: The name of the worksheet to export
+        output_path: Absolute path where CSV should be saved (e.g., '/home/claude/tasks.csv')
+    
+    Returns:
+        Success message with file path
+    """
+    try:
+        # Get the worksheet
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        worksheet = spreadsheet.worksheet(worksheet_name)
+        
+        # Get all values
+        all_values = worksheet.get_all_values()
+        
+        # Write to CSV
+        import csv
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerows(all_values)
+        
+        return f"Successfully exported {worksheet_name} to {output_path} ({len(all_values)} rows)"
+    
+    except Exception as e:
+        return f"Error exporting sheet: {str(e)}"
 
 # ============================================================================
 # GENERAL GOOGLE SHEETS TOOLS
