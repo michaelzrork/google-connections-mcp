@@ -797,36 +797,36 @@ class ReadSheetInput(BaseModel):
     worksheet_name: str = Field(..., min_length=1)
     range: Optional[str] = Field(default=None)
 
-@mcp.tool(name="read_sheet")
-async def read_sheet(params: ReadSheetInput) -> str:
-    """Read data from a specific worksheet."""
-    try:
-        client = get_sheets_client()
-        spreadsheet = client.open_by_key(params.spreadsheet_id)
-        worksheet = spreadsheet.worksheet(params.worksheet_name)
+# @mcp.tool(name="read_sheet")
+# async def read_sheet(params: ReadSheetInput) -> str:
+#     """Read data from a specific worksheet."""
+#     try:
+#         client = get_sheets_client()
+#         spreadsheet = client.open_by_key(params.spreadsheet_id)
+#         worksheet = spreadsheet.worksheet(params.worksheet_name)
         
-        if params.range:
-            values = worksheet.get(params.range)
-        else:
-            values = worksheet.get_all_values()
+#         if params.range:
+#             values = worksheet.get(params.range)
+#         else:
+#             values = worksheet.get_all_values()
         
-        return json.dumps({
-            "success": True,
-            "worksheet": params.worksheet_name,
-            "data": values
-        }, indent=2)
+#         return json.dumps({
+#             "success": True,
+#             "worksheet": params.worksheet_name,
+#             "data": values
+#         }, indent=2)
         
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
+#     except Exception as e:
+#         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-class WriteSheetInput(BaseModel):
-    """Input for writing to a sheet."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+# class WriteSheetInput(BaseModel):
+#     """Input for writing to a sheet."""
+#     model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
     
-    spreadsheet_id: str = Field(..., min_length=1)
-    worksheet_name: str = Field(..., min_length=1)
-    range: str = Field(..., min_length=1)
-    values: List[List[Any]] = Field(..., min_length=1)
+#     spreadsheet_id: str = Field(..., min_length=1)
+#     worksheet_name: str = Field(..., min_length=1)
+#     range: str = Field(..., min_length=1)
+#     values: List[List[Any]] = Field(..., min_length=1)
 
 @mcp.tool(name="write_to_sheet")
 async def write_to_sheet(params: WriteSheetInput) -> str:
