@@ -1,27 +1,23 @@
 #!/usr/bin/env python3
 """
-Remote MCP Server for Google Sheets and Google Workspace Tools  
-Full read/write access to Google Sheets, Calendar, Tasks, Drive, Docs, Slides, Gmail, and Keep.
+Daily Tracking MCP Server
+Provides intelligent querying and analysis of Google Sheets data
+Returns only processed insights, not raw data
 """
 
 import os
 import json
-import csv
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field, ConfigDict
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from googleapiclient.discovery import build
-from google.oauth2.service_account import Credentials as GoogleCredentials
+import pandas as pd
 
 # Initialize MCP server
 mcp = FastMCP("Daily Tracking")
-
-# Google Sheets setup
-SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
 
 # Initialize Google Sheets client
 def get_sheets_client():
@@ -40,197 +36,369 @@ def get_sheets_client():
     client = gspread.authorize(creds)
     return client
 
-# Initialize Google Calendar client
-def get_calendar_service():
-    """Initialize Google Calendar service with service account credentials."""
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-    if not creds_json:
-        raise ValueError("GOOGLE_CREDENTIALS_JSON environment variable not set")
-    
-    creds_dict = json.loads(creds_json)
-    scopes = ['https://www.googleapis.com/auth/calendar']
-    
-    creds = GoogleCredentials.from_service_account_info(creds_dict, scopes=scopes)
-    service = build('calendar', 'v3', credentials=creds)
-    return service
-
-# Initialize Google Tasks client
-def get_tasks_service():
-    """Initialize Google Tasks service with service account credentials."""
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-    if not creds_json:
-        raise ValueError("GOOGLE_CREDENTIALS_JSON environment variable not set")
-    
-    creds_dict = json.loads(creds_json)
-    scopes = ['https://www.googleapis.com/auth/tasks']
-    
-    creds = GoogleCredentials.from_service_account_info(creds_dict, scopes=scopes)
-    service = build('tasks', 'v1', credentials=creds)
-    return service
-
-# Initialize Google Drive client
-def get_drive_service():
-    """Initialize Google Drive service with service account credentials."""
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-    if not creds_json:
-        raise ValueError("GOOGLE_CREDENTIALS_JSON environment variable not set")
-    
-    creds_dict = json.loads(creds_json)
-    scopes = ['https://www.googleapis.com/auth/drive.readonly']
-    
-    creds = GoogleCredentials.from_service_account_info(creds_dict, scopes=scopes)
-    service = build('drive', 'v3', credentials=creds)
-    return service
-
-# Initialize Google Docs client
-def get_docs_service():
-    """Initialize Google Docs service with service account credentials."""
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-    if not creds_json:
-        raise ValueError("GOOGLE_CREDENTIALS_JSON environment variable not set")
-    
-    creds_dict = json.loads(creds_json)
-    scopes = ['https://www.googleapis.com/auth/documents.readonly']
-    
-    creds = GoogleCredentials.from_service_account_info(creds_dict, scopes=scopes)
-    service = build('docs', 'v1', credentials=creds)
-    return service
-
-# Initialize Google Slides client
-def get_slides_service():
-    """Initialize Google Slides service with service account credentials."""
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-    if not creds_json:
-        raise ValueError("GOOGLE_CREDENTIALS_JSON environment variable not set")
-    
-    creds_dict = json.loads(creds_json)
-    scopes = ['https://www.googleapis.com/auth/presentations.readonly']
-    
-    creds = GoogleCredentials.from_service_account_info(creds_dict, scopes=scopes)
-    service = build('slides', 'v1', credentials=creds)
-    return service
-
-# Initialize Gmail client
-def get_gmail_service():
-    """Initialize Gmail service with service account credentials."""
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-    if not creds_json:
-        raise ValueError("GOOGLE_CREDENTIALS_JSON environment variable not set")
-    
-    creds_dict = json.loads(creds_json)
-    scopes = [
-        'https://www.googleapis.com/auth/gmail.readonly',
-        'https://www.googleapis.com/auth/gmail.modify',
-        'https://www.googleapis.com/auth/gmail.compose',
-        'https://www.googleapis.com/auth/gmail.send'
-    ]
-    
-    creds = GoogleCredentials.from_service_account_info(creds_dict, scopes=scopes)
-    service = build('gmail', 'v1', credentials=creds)
-    return service
-
-# Initialize Google Keep client (via Keep API)
-def get_keep_service():
-    """Initialize Google Keep service with service account credentials."""
-    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-    if not creds_json:
-        raise ValueError("GOOGLE_CREDENTIALS_JSON environment variable not set")
-    
-    creds_dict = json.loads(creds_json)
-    scopes = ['https://www.googleapis.com/auth/keep.readonly']
-    
-    creds = GoogleCredentials.from_service_account_info(creds_dict, scopes=scopes)
-    service = build('keep', 'v1', credentials=creds)
-    return service
-
 # ============================================================================
-# GENERAL GOOGLE SHEETS TOOLS
+# HELPER FUNCTIONS FOR PRIORITY PARSING
 # ============================================================================
 
-@mcp.tool()
-async def export_sheet_as_csv(
-    spreadsheet_id: str,
-    worksheet_name: str,
-    output_path: str) -> str:
+def parse_priorities_cell(cell_content):
     """
-    Export a Google Sheet worksheet as CSV to a file path.
+    Parse the priorities cell into structured data.
     
-    Args:
-        spreadsheet_id: The ID of the spreadsheet
-        worksheet_name: The name of the worksheet to export
-        output_path: Absolute path where CSV should be saved (e.g., '/home/claude/tasks.csv')
+    Input example:
+    "1. Apply to 3 jobs | Completed | Applied to Fluency, BETA, OVR
+     2. Install Docker Desktop | Partial | Downloaded but ran out of time
+     3. Review database scripts | Not Started |"
     
-    Returns:
-        Success message with file path
+    Returns list of dicts with number, task, status, notes
+    """
+    if pd.isna(cell_content) or cell_content.strip() == '':
+        return []
+    
+    priorities = []
+    lines = cell_content.strip().split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Split by | delimiter
+        parts = [p.strip() for p in line.split('|')]
+        
+        if len(parts) < 2:
+            continue
+            
+        # Extract number and task from first part
+        first_part = parts[0]
+        if '. ' in first_part:
+            num_str, task = first_part.split('. ', 1)
+            try:
+                number = int(num_str)
+            except:
+                number = None
+        else:
+            number = None
+            task = first_part
+        
+        # Extract status and notes
+        status = parts[1] if len(parts) > 1 else ''
+        notes = parts[2] if len(parts) > 2 else ''
+        
+        priorities.append({
+            'number': number,
+            'task': task.strip(),
+            'status': status.strip(),
+            'notes': notes.strip()
+        })
+    
+    return priorities
+
+# ============================================================================
+# CORE QUERYING FUNCTION
+# ============================================================================
+
+class QuerySheetInput(BaseModel):
+    """Input for querying a sheet with filters."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    filters: List[Dict[str, Any]] = Field(default=[])
+    return_columns: Optional[List[str]] = Field(default=None)
+    limit: Optional[int] = Field(default=None)
+    sort_by: Optional[str] = Field(default=None)
+    sort_desc: bool = Field(default=False)
+
+@mcp.tool(name="query_sheet")
+async def query_sheet(params: QuerySheetInput) -> str:
+    """
+    Query a Google Sheet with flexible filtering.
+    
+    Filters support:
+    - {'field': 'Status', 'operator': '==', 'value': 'FALSE'}
+    - {'field': 'Do Date', 'operator': '<=', 'value': '2025-10-27'}
+    - {'field': 'Category', 'operator': 'in', 'value': ['Work', 'Job Search']}
+    
+    Operators: ==, !=, >, <, >=, <=, in, not in, contains, not contains, is_null, not_null
     """
     try:
-        import csv
-        import os
-        
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        
         client = get_sheets_client()
+        spreadsheet = client.open_by_key(params.spreadsheet_id)
+        worksheet = spreadsheet.worksheet(params.worksheet_name)
         
-        # Get the worksheet
-        spreadsheet = client.open_by_key(spreadsheet_id)
-        worksheet = spreadsheet.worksheet(worksheet_name)
+        # Get all data as DataFrame
+        data = worksheet.get_all_values()
+        if not data:
+            return json.dumps({"success": True, "data": [], "count": 0}, indent=2)
         
-        # Get all values
-        all_values = worksheet.get_all_values()
+        df = pd.DataFrame(data[1:], columns=data[0])
         
-        # Write to CSV
-        with open(output_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerows(all_values)
+        # Apply filters
+        for filter_def in params.filters:
+            field = filter_def['field']
+            operator = filter_def['operator']
+            value = filter_def['value']
+            
+            if field not in df.columns:
+                continue
+            
+            if operator == '==':
+                df = df[df[field] == value]
+            elif operator == '!=':
+                df = df[df[field] != value]
+            elif operator == '>':
+                df = df[df[field] > value]
+            elif operator == '<':
+                df = df[df[field] < value]
+            elif operator == '>=':
+                df = df[df[field] >= value]
+            elif operator == '<=':
+                df = df[df[field] <= value]
+            elif operator == 'in':
+                df = df[df[field].isin(value)]
+            elif operator == 'not in':
+                df = df[~df[field].isin(value)]
+            elif operator == 'contains':
+                df = df[df[field].str.contains(value, case=False, na=False)]
+            elif operator == 'not contains':
+                df = df[~df[field].str.contains(value, case=False, na=False)]
+            elif operator == 'is_null':
+                df = df[df[field].isna() | (df[field] == '')]
+            elif operator == 'not_null':
+                df = df[df[field].notna() & (df[field] != '')]
         
-        return f"Successfully exported {worksheet_name} to {output_path} ({len(all_values)} rows)"
-    
-    except Exception as e:
-        return f"Error exporting sheet: {str(e)}"
-    
-@mcp.tool(name="list_spreadsheets")
-async def list_spreadsheets() -> str:
-    """List all spreadsheets accessible to the service account."""
-    try:
-        client = get_sheets_client()
-        spreadsheets = client.openall()
+        # Select columns
+        if params.return_columns:
+            available_cols = [col for col in params.return_columns if col in df.columns]
+            if available_cols:
+                df = df[available_cols]
         
-        if not spreadsheets:
-            return "No spreadsheets found."
+        # Sort
+        if params.sort_by and params.sort_by in df.columns:
+            df = df.sort_values(by=params.sort_by, ascending=not params.sort_desc)
         
-        lines = [f"# Your Spreadsheets ({len(spreadsheets)} total)\n"]
-        for sheet in spreadsheets:
-            lines.append(f"**{sheet.title}**")
-            lines.append(f"  ID: `{sheet.id}`")
-            lines.append(f"  URL: {sheet.url}\n")
+        # Limit
+        if params.limit:
+            df = df.head(params.limit)
         
-        return "\n".join(lines)
+        # Convert to dict
+        result = df.to_dict('records')
+        
+        return json.dumps({
+            "success": True,
+            "data": result,
+            "count": len(result)
+        }, indent=2)
         
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool(name="list_worksheets")
-async def list_worksheets(spreadsheet_id: str) -> str:
-    """List all worksheets (tabs) in a spreadsheet."""
+# ============================================================================
+# ANALYSIS FUNCTIONS
+# ============================================================================
+
+class AnalyzeSheetInput(BaseModel):
+    """Input for analyzing sheet data."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    analysis_type: str = Field(..., description="Type of analysis: priority_patterns, count_by_pattern, date_summary")
+    date_column: Optional[str] = Field(default=None)
+    days_back: Optional[int] = Field(default=7)
+    start_date: Optional[str] = Field(default=None)
+    end_date: Optional[str] = Field(default=None)
+    options: Dict[str, Any] = Field(default={})
+
+@mcp.tool(name="analyze_sheet")
+async def analyze_sheet(params: AnalyzeSheetInput) -> str:
+    """
+    Analyze sheet data and return insights (not raw data).
+    
+    Analysis types:
+    - priority_patterns: Detect avoidance, completion rates, streaks
+    - count_by_pattern: Count rows matching a pattern
+    - date_summary: Summarize data for a specific date range
+    """
     try:
         client = get_sheets_client()
-        spreadsheet = client.open_by_key(spreadsheet_id)
-        worksheets = spreadsheet.worksheets()
+        spreadsheet = client.open_by_key(params.spreadsheet_id)
+        worksheet = spreadsheet.worksheet(params.worksheet_name)
         
-        if not worksheets:
-            return "No worksheets found."
+        # Get all data as DataFrame
+        data = worksheet.get_all_values()
+        if not data:
+            return json.dumps({"success": True, "insights": {}, "message": "No data found"}, indent=2)
         
-        lines = [f"# Worksheets in {spreadsheet.title} ({len(worksheets)} total)\n"]
-        for ws in worksheets:
-            lines.append(f"**{ws.title}**")
-            lines.append(f"  Index: {ws.index}")
-            lines.append(f"  Rows: {ws.row_count}, Columns: {ws.col_count}\n")
+        df = pd.DataFrame(data[1:], columns=data[0])
         
-        return "\n".join(lines)
+        # Filter by date if specified
+        if params.date_column and params.date_column in df.columns:
+            df[params.date_column] = pd.to_datetime(df[params.date_column], errors='coerce')
+            
+            if params.start_date and params.end_date:
+                start = pd.to_datetime(params.start_date)
+                end = pd.to_datetime(params.end_date)
+                df = df[(df[params.date_column] >= start) & (df[params.date_column] <= end)]
+            elif params.days_back:
+                cutoff = datetime.now() - timedelta(days=params.days_back)
+                df = df[df[params.date_column] >= cutoff]
+        
+        # Run analysis based on type
+        if params.analysis_type == 'priority_patterns':
+            insights = analyze_priority_patterns(df, params.options)
+        elif params.analysis_type == 'count_by_pattern':
+            insights = count_by_pattern(df, params.options)
+        elif params.analysis_type == 'date_summary':
+            insights = date_summary(df, params.options)
+        else:
+            return json.dumps({"success": False, "error": f"Unknown analysis type: {params.analysis_type}"}, indent=2)
+        
+        return json.dumps({
+            "success": True,
+            "insights": insights
+        }, indent=2)
         
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+def analyze_priority_patterns(df: pd.DataFrame, options: dict) -> dict:
+    """Analyze daily priorities for patterns."""
+    if 'Priorities' not in df.columns:
+        return {"error": "No Priorities column found"}
+    
+    # Parse all priorities
+    all_priorities = []
+    for idx, row in df.iterrows():
+        parsed = parse_priorities_cell(row.get('Priorities', ''))
+        for p in parsed:
+            p['date'] = row.get('Date')
+            all_priorities.append(p)
+    
+    if not all_priorities:
+        return {"message": "No priorities found"}
+    
+    priorities_df = pd.DataFrame(all_priorities)
+    
+    results = {
+        'avoidance_patterns': [],
+        'completion_rates': {},
+        'streak_info': []
+    }
+    
+    # 1. Avoidance patterns
+    if options.get('detect_avoidance', True):
+        for task in priorities_df['task'].unique():
+            task_entries = priorities_df[priorities_df['task'] == task]
+            incomplete = task_entries['status'].isin(['Not Started', 'Moved', 'Partial'])
+            incomplete_count = incomplete.sum()
+            
+            if len(task_entries) >= 3 and incomplete_count >= 2:
+                results['avoidance_patterns'].append({
+                    'task': task,
+                    'days_appeared': len(task_entries),
+                    'days_incomplete': int(incomplete_count),
+                    'avg_position': float(task_entries['number'].mean())
+                })
+    
+    # 2. Completion rates by priority position
+    if options.get('completion_rates', True):
+        for pos in range(1, 6):
+            pos_priorities = priorities_df[priorities_df['number'] == pos]
+            if len(pos_priorities) > 0:
+                completed = (pos_priorities['status'] == 'Completed').sum()
+                results['completion_rates'][f'P{pos}'] = {
+                    'rate': float(completed / len(pos_priorities)),
+                    'completed': int(completed),
+                    'total': int(len(pos_priorities))
+                }
+    
+    # 3. Streaks
+    if options.get('streaks', True):
+        # Get most recent date's tasks
+        if 'date' in priorities_df.columns:
+            priorities_df['date'] = pd.to_datetime(priorities_df['date'], errors='coerce')
+            sorted_priorities = priorities_df.sort_values('date', ascending=False)
+            
+            if len(sorted_priorities) > 0:
+                latest_date = sorted_priorities.iloc[0]['date']
+                latest_tasks = sorted_priorities[sorted_priorities['date'] == latest_date]['task'].tolist()
+                
+                for task in latest_tasks:
+                    # Count consecutive days
+                    streak = 0
+                    current_date = latest_date
+                    
+                    for _ in range(7):
+                        day_priorities = sorted_priorities[sorted_priorities['date'] == current_date]
+                        if task in day_priorities['task'].values:
+                            streak += 1
+                            current_date = current_date - timedelta(days=1)
+                        else:
+                            break
+                    
+                    if streak >= 2:
+                        results['streak_info'].append({
+                            'task': task,
+                            'days': int(streak)
+                        })
+    
+    # 4. Yesterday's status (if requested)
+    if options.get('yesterday_status', False):
+        yesterday = datetime.now() - timedelta(days=1)
+        yesterday_str = yesterday.strftime('%Y-%m-%d')
+        yesterday_priorities = priorities_df[
+            priorities_df['date'] == yesterday_str
+        ]
+        
+        if len(yesterday_priorities) > 0:
+            results['yesterday_status'] = yesterday_priorities.to_dict('records')
+    
+    return results
+
+def count_by_pattern(df: pd.DataFrame, options: dict) -> dict:
+    """Count rows matching a pattern."""
+    search_column = options.get('search_column')
+    pattern = options.get('pattern')
+    case_insensitive = options.get('case_insensitive', True)
+    
+    if not search_column or not pattern:
+        return {"error": "Must specify search_column and pattern"}
+    
+    if search_column not in df.columns:
+        return {"error": f"Column {search_column} not found"}
+    
+    matches = df[df[search_column].str.contains(pattern, case=case_insensitive, na=False)]
+    
+    return {
+        "count": len(matches),
+        "matches": matches.to_dict('records') if options.get('return_matches', False) else []
+    }
+
+def date_summary(df: pd.DataFrame, options: dict) -> dict:
+    """Summarize data for specific dates."""
+    date_column = options.get('date_column', 'Date')
+    target_date = options.get('target_date')
+    
+    if date_column not in df.columns:
+        return {"error": f"Column {date_column} not found"}
+    
+    if target_date:
+        df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
+        target = pd.to_datetime(target_date)
+        day_data = df[df[date_column] == target]
+        
+        return {
+            "date": target_date,
+            "count": len(day_data),
+            "data": day_data.to_dict('records')
+        }
+    
+    return {"error": "Must specify target_date"}
+
+# ============================================================================
+# BASIC CRUD OPERATIONS (Keep these for writing)
+# ============================================================================
 
 class ReadSheetInput(BaseModel):
     """Input for reading a sheet."""
@@ -316,1249 +484,8 @@ async def append_rows(params: AppendRowsInput) -> str:
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool(name="create_spreadsheet")
-async def create_spreadsheet(title: str) -> str:
-    """Create a new spreadsheet."""
-    try:
-        client = get_sheets_client()
-        spreadsheet = client.create(title)
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Created spreadsheet: {title}",
-            "id": spreadsheet.id,
-            "url": spreadsheet.url
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-class CreateWorksheetInput(BaseModel):
-    """Input for creating a worksheet."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    spreadsheet_id: str = Field(..., min_length=1)
-    title: str = Field(..., min_length=1)
-    rows: int = Field(default=1000, ge=1)
-    cols: int = Field(default=26, ge=1)
-
-@mcp.tool(name="create_worksheet")
-async def create_worksheet(params: CreateWorksheetInput) -> str:
-    """Create a new worksheet (tab) in an existing spreadsheet."""
-    try:
-        client = get_sheets_client()
-        spreadsheet = client.open_by_key(params.spreadsheet_id)
-        
-        worksheet = spreadsheet.add_worksheet(
-            title=params.title,
-            rows=params.rows,
-            cols=params.cols
-        )
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Created worksheet: {params.title}",
-            "worksheet_id": worksheet.id
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-class DeleteWorksheetInput(BaseModel):
-    """Input for deleting a worksheet."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    spreadsheet_id: str = Field(..., min_length=1)
-    worksheet_name: str = Field(..., min_length=1)
-
-@mcp.tool(name="delete_worksheet")
-async def delete_worksheet(params: DeleteWorksheetInput) -> str:
-    """Delete a worksheet (tab) from a spreadsheet."""
-    try:
-        client = get_sheets_client()
-        spreadsheet = client.open_by_key(params.spreadsheet_id)
-        worksheet = spreadsheet.worksheet(params.worksheet_name)
-        
-        spreadsheet.del_worksheet(worksheet)
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Deleted worksheet: {params.worksheet_name}"
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-class ClearRangeInput(BaseModel):
-    """Input for clearing a range."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    spreadsheet_id: str = Field(..., min_length=1)
-    worksheet_name: str = Field(..., min_length=1)
-    range: str = Field(..., min_length=1)
-
-@mcp.tool(name="clear_range")
-async def clear_range(params: ClearRangeInput) -> str:
-    """Clear data from a specific range in a worksheet."""
-    try:
-        client = get_sheets_client()
-        spreadsheet = client.open_by_key(params.spreadsheet_id)
-        worksheet = spreadsheet.worksheet(params.worksheet_name)
-        
-        worksheet.batch_clear([params.range])
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Cleared range: {params.range}"
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-class CopyWorksheetInput(BaseModel):
-    """Input for copying a worksheet."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    spreadsheet_id: str = Field(..., min_length=1)
-    worksheet_name: str = Field(..., min_length=1)
-    new_title: str = Field(..., min_length=1)
-
-@mcp.tool(name="copy_worksheet")
-async def copy_worksheet(params: CopyWorksheetInput) -> str:
-    """Duplicate a worksheet within the same spreadsheet."""
-    try:
-        client = get_sheets_client()
-        spreadsheet = client.open_by_key(params.spreadsheet_id)
-        worksheet = spreadsheet.worksheet(params.worksheet_name)
-        
-        new_worksheet = worksheet.duplicate(new_sheet_name=params.new_title)
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Copied worksheet to: {params.new_title}",
-            "worksheet_id": new_worksheet.id
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-class FormatCellsInput(BaseModel):
-    """Input for formatting cells."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    spreadsheet_id: str = Field(..., min_length=1)
-    worksheet_name: str = Field(..., min_length=1)
-    range: str = Field(..., min_length=1)
-    bold: Optional[bool] = Field(default=None)
-    italic: Optional[bool] = Field(default=None)
-    background_color: Optional[Dict[str, float]] = Field(default=None)
-    text_color: Optional[Dict[str, float]] = Field(default=None)
-
-@mcp.tool(name="format_cells")
-async def format_cells(params: FormatCellsInput) -> str:
-    """Apply formatting to cells (bold, italic, colors)."""
-    try:
-        client = get_sheets_client()
-        spreadsheet = client.open_by_key(params.spreadsheet_id)
-        worksheet = spreadsheet.worksheet(params.worksheet_name)
-        
-        format_dict = {}
-        
-        if params.bold is not None or params.italic is not None:
-            text_format = {}
-            if params.bold is not None:
-                text_format['bold'] = params.bold
-            if params.italic is not None:
-                text_format['italic'] = params.italic
-            format_dict['textFormat'] = text_format
-        
-        if params.background_color:
-            format_dict['backgroundColor'] = params.background_color
-        
-        if params.text_color:
-            if 'textFormat' not in format_dict:
-                format_dict['textFormat'] = {}
-            format_dict['textFormat']['foregroundColor'] = params.text_color
-        
-        worksheet.format(params.range, format_dict)
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Applied formatting to range: {params.range}"
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-class SearchSheetsInput(BaseModel):
-    """Input for searching sheets."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    spreadsheet_id: str = Field(..., min_length=1)
-    search_term: str = Field(..., min_length=1)
-    worksheet_name: Optional[str] = Field(default=None)
-
-@mcp.tool(name="search_sheets")
-async def search_sheets(params: SearchSheetsInput) -> str:
-    """Search for data across worksheets in a spreadsheet."""
-    try:
-        client = get_sheets_client()
-        spreadsheet = client.open_by_key(params.spreadsheet_id)
-        
-        if params.worksheet_name:
-            worksheets = [spreadsheet.worksheet(params.worksheet_name)]
-        else:
-            worksheets = spreadsheet.worksheets()
-        
-        results = []
-        for worksheet in worksheets:
-            try:
-                cells = worksheet.findall(params.search_term)
-                for cell in cells:
-                    results.append({
-                        "worksheet": worksheet.title,
-                        "cell": cell.address,
-                        "value": cell.value,
-                        "row": cell.row,
-                        "col": cell.col
-                    })
-            except:
-                continue
-        
-        if not results:
-            return f"No matches found for '{params.search_term}'"
-        
-        lines = [f"# Search Results for '{params.search_term}' ({len(results)} matches)\n"]
-        for result in results:
-            lines.append(f"**{result['worksheet']}** - Cell {result['cell']}")
-            lines.append(f"  Value: {result['value']}\n")
-        
-        return "\n".join(lines)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
 # ============================================================================
-# GOOGLE CALENDAR TOOLS
-# ============================================================================
-
-class CreateEventInput(BaseModel):
-    """Input for creating a calendar event."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    calendar_id: str = Field(default="primary")
-    summary: str = Field(..., min_length=1, max_length=200)
-    start_datetime: str = Field(..., description="ISO format: 2025-10-27T10:00:00-04:00")
-    end_datetime: str = Field(..., description="ISO format: 2025-10-27T11:00:00-04:00")
-    description: Optional[str] = Field(default=None)
-    location: Optional[str] = Field(default=None)
-
-@mcp.tool(name="create_calendar_event")
-async def create_calendar_event(params: CreateEventInput) -> str:
-    """Create a new calendar event."""
-    try:
-        service = get_calendar_service()
-        
-        event = {
-            'summary': params.summary,
-            'start': {
-                'dateTime': params.start_datetime,
-                'timeZone': 'America/New_York',
-            },
-            'end': {
-                'dateTime': params.end_datetime,
-                'timeZone': 'America/New_York',
-            }
-        }
-        
-        if params.description:
-            event['description'] = params.description
-        if params.location:
-            event['location'] = params.location
-        
-        created_event = service.events().insert(
-            calendarId=params.calendar_id,
-            body=event
-        ).execute()
-        
-        return json.dumps({
-            "success": True,
-            "message": "Event created successfully",
-            "event_id": created_event['id'],
-            "html_link": created_event.get('htmlLink'),
-            "summary": created_event['summary']
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-class UpdateEventInput(BaseModel):
-    """Input for updating a calendar event."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    calendar_id: str = Field(default="primary")
-    event_id: str = Field(..., min_length=1)
-    summary: Optional[str] = Field(default=None, max_length=200)
-    start_datetime: Optional[str] = Field(default=None)
-    end_datetime: Optional[str] = Field(default=None)
-    description: Optional[str] = Field(default=None)
-    location: Optional[str] = Field(default=None)
-
-@mcp.tool(name="update_calendar_event")
-async def update_calendar_event(params: UpdateEventInput) -> str:
-    """Update an existing calendar event."""
-    try:
-        service = get_calendar_service()
-        
-        # Get existing event
-        event = service.events().get(
-            calendarId=params.calendar_id,
-            eventId=params.event_id
-        ).execute()
-        
-        # Update fields if provided
-        if params.summary:
-            event['summary'] = params.summary
-        if params.description:
-            event['description'] = params.description
-        if params.location:
-            event['location'] = params.location
-        if params.start_datetime:
-            event['start'] = {
-                'dateTime': params.start_datetime,
-                'timeZone': 'America/New_York'
-            }
-        if params.end_datetime:
-            event['end'] = {
-                'dateTime': params.end_datetime,
-                'timeZone': 'America/New_York'
-            }
-        
-        updated_event = service.events().update(
-            calendarId=params.calendar_id,
-            eventId=params.event_id,
-            body=event
-        ).execute()
-        
-        return json.dumps({
-            "success": True,
-            "message": "Event updated successfully",
-            "event_id": updated_event['id'],
-            "summary": updated_event['summary']
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-class DeleteEventInput(BaseModel):
-    """Input for deleting a calendar event."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    calendar_id: str = Field(default="primary")
-    event_id: str = Field(..., min_length=1)
-
-@mcp.tool(name="delete_calendar_event")
-async def delete_calendar_event(params: DeleteEventInput) -> str:
-    """Delete a calendar event."""
-    try:
-        service = get_calendar_service()
-        
-        service.events().delete(
-            calendarId=params.calendar_id,
-            eventId=params.event_id
-        ).execute()
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Event deleted successfully"
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-@mcp.tool(name="list_calendar_events")
-async def list_calendar_events(
-    calendar_id: str = "primary",
-    time_min: Optional[str] = None,
-    time_max: Optional[str] = None,
-    max_results: int = 10
-) -> str:
-    """List calendar events within a time range."""
-    try:
-        service = get_calendar_service()
-        
-        # Default to today if no time range specified
-        if not time_min:
-            time_min = datetime.now().replace(hour=0, minute=0, second=0).isoformat() + '-04:00'
-        if not time_max:
-            time_max = (datetime.now() + timedelta(days=7)).isoformat() + '-04:00'
-        
-        events_result = service.events().list(
-            calendarId=calendar_id,
-            timeMin=time_min,
-            timeMax=time_max,
-            maxResults=max_results,
-            singleEvents=True,
-            orderBy='startTime'
-        ).execute()
-        
-        events = events_result.get('items', [])
-        
-        if not events:
-            return "No upcoming events found."
-        
-        lines = [f"# Upcoming Events ({len(events)} total)\n"]
-        for event in events:
-            start = event['start'].get('dateTime', event['start'].get('date'))
-            summary = event.get('summary', 'No title')
-            lines.append(f"**{start}** - {summary}")
-            if event.get('location'):
-                lines.append(f"  📍 {event['location']}")
-            if event.get('description'):
-                lines.append(f"  ℹ️ {event['description'][:100]}...")
-            lines.append(f"  🆔 Event ID: `{event['id']}`\n")
-        
-        return "\n".join(lines)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-# ============================================================================
-# GOOGLE TASKS TOOLS
-# ============================================================================
-
-@mcp.tool(name="list_google_tasks")
-async def list_google_tasks(tasklist: str = "@default") -> str:
-    """List tasks from Google Tasks. Use this to find reminders the user set via Google Assistant."""
-    try:
-        service = get_tasks_service()
-        
-        # Get task lists
-        results = service.tasklists().list().execute()
-        lists = results.get('items', [])
-        
-        if not lists:
-            return "No task lists found."
-        
-        # Find the specified list or use default
-        target_list = None
-        if tasklist == "@default":
-            target_list = lists[0]['id']
-        else:
-            for tl in lists:
-                if tl['title'].lower() == tasklist.lower():
-                    target_list = tl['id']
-                    break
-            if not target_list:
-                target_list = lists[0]['id']
-        
-        # Get tasks from the list
-        tasks_result = service.tasks().list(tasklist=target_list).execute()
-        tasks = tasks_result.get('items', [])
-        
-        if not tasks:
-            return "No tasks found in this list."
-        
-        lines = [f"# Google Tasks ({len(tasks)} total)\n"]
-        for task in tasks:
-            status = "✅" if task.get('status') == 'completed' else "⬜"
-            title = task.get('title', 'Untitled')
-            lines.append(f"{status} **{title}**")
-            if task.get('notes'):
-                lines.append(f"  📝 {task['notes']}")
-            if task.get('due'):
-                lines.append(f"  📅 Due: {task['due']}")
-            lines.append(f"  🆔 Task ID: `{task['id']}`\n")
-        
-        return "\n".join(lines)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-@mcp.tool(name="mark_google_task_complete")
-async def mark_google_task_complete(task_id: str, tasklist: str = "@default") -> str:
-    """Mark a Google Task as complete. Use after migrating to our Tasks sheet."""
-    try:
-        service = get_tasks_service()
-        
-        # Get task lists to find the right one
-        results = service.tasklists().list().execute()
-        lists = results.get('items', [])
-        
-        target_list = lists[0]['id'] if lists else None
-        
-        if not target_list:
-            return json.dumps({"success": False, "error": "No task lists found"}, indent=2)
-        
-        # Update task status
-        task = service.tasks().get(tasklist=target_list, task=task_id).execute()
-        task['status'] = 'completed'
-        
-        service.tasks().update(
-            tasklist=target_list,
-            task=task_id,
-            body=task
-        ).execute()
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Task marked complete in Google Tasks"
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-# ============================================================================
-# GOOGLE DRIVE TOOLS
-# ============================================================================
-
-@mcp.tool(name="search_google_drive")
-async def search_google_drive(query: str, max_results: int = 10) -> str:
-    """Search for files in Google Drive. Use when user mentions 'that doc' or 'my file about X'."""
-    try:
-        service = get_drive_service()
-        
-        results = service.files().list(
-            q=f"fullText contains '{query}' or name contains '{query}'",
-            pageSize=max_results,
-            fields="files(id, name, mimeType, webViewLink, modifiedTime)"
-        ).execute()
-        
-        files = results.get('files', [])
-        
-        if not files:
-            return f"No files found matching '{query}'"
-        
-        lines = [f"# Drive Search Results for '{query}' ({len(files)} files)\n"]
-        for file in files:
-            name = file['name']
-            file_type = file['mimeType'].split('.')[-1]
-            link = file.get('webViewLink', 'No link')
-            modified = file.get('modifiedTime', '')
-            
-            lines.append(f"**{name}** ({file_type})")
-            lines.append(f"  🔗 {link}")
-            lines.append(f"  📅 Modified: {modified}")
-            lines.append(f"  🆔 File ID: `{file['id']}`\n")
-        
-        return "\n".join(lines)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-# ============================================================================
-# GOOGLE DOCS TOOLS
-# ============================================================================
-
-@mcp.tool(name="read_google_doc")
-async def read_google_doc(document_id: str) -> str:
-    """Read the contents of a Google Doc. Use the document ID from Drive search."""
-    try:
-        service = get_docs_service()
-        
-        doc = service.documents().get(documentId=document_id).execute()
-        
-        title = doc.get('title', 'Untitled')
-        content = doc.get('body', {}).get('content', [])
-        
-        # Extract text from doc structure
-        text_parts = []
-        for element in content:
-            if 'paragraph' in element:
-                para_elements = element['paragraph'].get('elements', [])
-                for pe in para_elements:
-                    if 'textRun' in pe:
-                        text_parts.append(pe['textRun'].get('content', ''))
-        
-        full_text = ''.join(text_parts)
-        
-        lines = [
-            f"# {title}\n",
-            full_text[:3000]  # Limit to first 3000 chars
-        ]
-        
-        if len(full_text) > 3000:
-            lines.append(f"\n\n... (truncated, {len(full_text)} total characters)")
-        
-        return "\n".join(lines)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-# ============================================================================
-# GOOGLE SLIDES TOOLS
-# ============================================================================
-
-@mcp.tool(name="list_google_slides")
-async def list_google_slides(max_results: int = 10) -> str:
-    """List recent Google Slides presentations."""
-    try:
-        drive_service = get_drive_service()
-        
-        results = drive_service.files().list(
-            q="mimeType='application/vnd.google-apps.presentation'",
-            pageSize=max_results,
-            orderBy="modifiedTime desc",
-            fields="files(id, name, webViewLink, modifiedTime)"
-        ).execute()
-        
-        files = results.get('files', [])
-        
-        if not files:
-            return "No presentations found."
-        
-        lines = [f"# Your Presentations ({len(files)} total)\n"]
-        for file in files:
-            lines.append(f"**{file['name']}**")
-            lines.append(f"  🔗 {file.get('webViewLink', 'No link')}")
-            lines.append(f"  📅 Modified: {file.get('modifiedTime', '')}")
-            lines.append(f"  🆔 Presentation ID: `{file['id']}`\n")
-        
-        return "\n".join(lines)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-@mcp.tool(name="read_google_slides")
-async def read_google_slides(presentation_id: str) -> str:
-    """Read the contents of a Google Slides presentation."""
-    try:
-        service = get_slides_service()
-        
-        presentation = service.presentations().get(
-            presentationId=presentation_id
-        ).execute()
-        
-        title = presentation.get('title', 'Untitled')
-        slides = presentation.get('slides', [])
-        
-        lines = [f"# {title}\n", f"**{len(slides)} slides total**\n"]
-        
-        for i, slide in enumerate(slides, 1):
-            lines.append(f"## Slide {i}")
-            
-            # Extract text from slide elements
-            page_elements = slide.get('pageElements', [])
-            for element in page_elements:
-                if 'shape' in element:
-                    shape = element['shape']
-                    if 'text' in shape:
-                        text_content = shape['text'].get('textElements', [])
-                        for text_el in text_content:
-                            if 'textRun' in text_el:
-                                content = text_el['textRun'].get('content', '').strip()
-                                if content:
-                                    lines.append(f"  {content}")
-            lines.append("")
-        
-        return "\n".join(lines)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-# ============================================================================
-# GMAIL TOOLS (READ)
-# ============================================================================
-
-@mcp.tool(name="search_gmail")
-async def search_gmail(query: str, max_results: int = 10) -> str:
-    """Search Gmail for specific emails. Use when user asks about emails."""
-    try:
-        service = get_gmail_service()
-        
-        results = service.users().messages().list(
-            userId='me',
-            q=query,
-            maxResults=max_results
-        ).execute()
-        
-        messages = results.get('messages', [])
-        
-        if not messages:
-            return f"No emails found matching '{query}'"
-        
-        lines = [f"# Gmail Search Results for '{query}' ({len(messages)} emails)\n"]
-        
-        for msg in messages:
-            # Get full message details
-            message = service.users().messages().get(
-                userId='me',
-                id=msg['id'],
-                format='metadata',
-                metadataHeaders=['From', 'Subject', 'Date']
-            ).execute()
-            
-            headers = message.get('payload', {}).get('headers', [])
-            subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No subject')
-            from_email = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
-            date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
-            
-            # Check if unread
-            labels = message.get('labelIds', [])
-            unread = '🔴 UNREAD' if 'UNREAD' in labels else ''
-            
-            lines.append(f"**{subject}** {unread}")
-            lines.append(f"  📧 From: {from_email}")
-            lines.append(f"  📅 {date}")
-            lines.append(f"  🆔 Message ID: `{msg['id']}`\n")
-        
-        return "\n".join(lines)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-@mcp.tool(name="get_unread_emails")
-async def get_unread_emails(max_results: int = 20) -> str:
-    """Get unread emails for quick triage. Perfect for morning inbox review."""
-    try:
-        service = get_gmail_service()
-        
-        results = service.users().messages().list(
-            userId='me',
-            q='is:unread',
-            maxResults=max_results
-        ).execute()
-        
-        messages = results.get('messages', [])
-        
-        if not messages:
-            return "🎉 Inbox Zero! No unread emails."
-        
-        lines = [f"# 📬 Unread Emails ({len(messages)} total)\n"]
-        
-        urgent_keywords = ['urgent', 'asap', 'important', 'interview', 'offer', 'deadline', 'today']
-        urgent_emails = []
-        normal_emails = []
-        
-        for msg in messages:
-            message = service.users().messages().get(
-                userId='me',
-                id=msg['id'],
-                format='metadata',
-                metadataHeaders=['From', 'Subject', 'Date']
-            ).execute()
-            
-            headers = message.get('payload', {}).get('headers', [])
-            subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No subject')
-            from_email = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
-            date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
-            
-            # Check for urgency
-            is_urgent = any(keyword in subject.lower() for keyword in urgent_keywords)
-            
-            email_info = {
-                'subject': subject,
-                'from': from_email,
-                'date': date,
-                'id': msg['id']
-            }
-            
-            if is_urgent:
-                urgent_emails.append(email_info)
-            else:
-                normal_emails.append(email_info)
-        
-        # Show urgent first
-        if urgent_emails:
-            lines.append("## 🚨 URGENT - Need Attention\n")
-            for email in urgent_emails:
-                lines.append(f"**{email['subject']}**")
-                lines.append(f"  📧 From: {email['from']}")
-                lines.append(f"  📅 {email['date']}")
-                lines.append(f"  🆔 `{email['id']}`\n")
-        
-        if normal_emails:
-            lines.append(f"## 📮 Other Unread ({len(normal_emails)})\n")
-            for email in normal_emails[:10]:  # Limit to first 10
-                lines.append(f"**{email['subject']}**")
-                lines.append(f"  📧 From: {email['from']}")
-                lines.append(f"  🆔 `{email['id']}`\n")
-            
-            if len(normal_emails) > 10:
-                lines.append(f"... and {len(normal_emails) - 10} more")
-        
-        return "\n".join(lines)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-@mcp.tool(name="read_gmail_message")
-async def read_gmail_message(message_id: str) -> str:
-    """Read the full contents of a Gmail message."""
-    try:
-        import base64
-        service = get_gmail_service()
-        
-        message = service.users().messages().get(
-            userId='me',
-            id=message_id,
-            format='full'
-        ).execute()
-        
-        headers = message.get('payload', {}).get('headers', [])
-        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No subject')
-        from_email = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
-        date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
-        
-        # Get body
-        parts = message.get('payload', {}).get('parts', [])
-        body = ""
-        
-        if parts:
-            for part in parts:
-                if part.get('mimeType') == 'text/plain':
-                    body_data = part.get('body', {}).get('data', '')
-                    if body_data:
-                        body = base64.urlsafe_b64decode(body_data).decode('utf-8')
-                        break
-        else:
-            body_data = message.get('payload', {}).get('body', {}).get('data', '')
-            if body_data:
-                body = base64.urlsafe_b64decode(body_data).decode('utf-8')
-        
-        lines = [
-            f"# {subject}\n",
-            f"**From:** {from_email}",
-            f"**Date:** {date}\n",
-            "---\n",
-            body[:2000]  # Limit to first 2000 chars
-        ]
-        
-        if len(body) > 2000:
-            lines.append(f"\n\n... (truncated, {len(body)} total characters)")
-        
-        return "\n".join(lines)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-# ============================================================================
-# GMAIL TOOLS (WRITE/MODIFY) - NEW!
-# ============================================================================
-
-class MarkEmailReadInput(BaseModel):
-    """Input for marking emails as read."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    message_ids: List[str] = Field(..., min_length=1, description="List of message IDs to mark as read")
-
-@mcp.tool(name="mark_emails_read")
-async def mark_emails_read(params: MarkEmailReadInput) -> str:
-    """Mark one or more emails as read."""
-    try:
-        service = get_gmail_service()
-        
-        # Remove UNREAD label from messages
-        service.users().messages().batchModify(
-            userId='me',
-            body={
-                'ids': params.message_ids,
-                'removeLabelIds': ['UNREAD']
-            }
-        ).execute()
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Marked {len(params.message_ids)} email(s) as read"
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-class MarkEmailUnreadInput(BaseModel):
-    """Input for marking emails as unread."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    message_ids: List[str] = Field(..., min_length=1, description="List of message IDs to mark as unread")
-
-@mcp.tool(name="mark_emails_unread")
-async def mark_emails_unread(params: MarkEmailUnreadInput) -> str:
-    """Mark one or more emails as unread."""
-    try:
-        service = get_gmail_service()
-        
-        # Add UNREAD label to messages
-        service.users().messages().batchModify(
-            userId='me',
-            body={
-                'ids': params.message_ids,
-                'addLabelIds': ['UNREAD']
-            }
-        ).execute()
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Marked {len(params.message_ids)} email(s) as unread"
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-class ArchiveEmailsInput(BaseModel):
-    """Input for archiving emails."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    message_ids: List[str] = Field(..., min_length=1, description="List of message IDs to archive")
-
-@mcp.tool(name="archive_emails")
-async def archive_emails(params: ArchiveEmailsInput) -> str:
-    """Archive one or more emails (remove from INBOX)."""
-    try:
-        service = get_gmail_service()
-        
-        # Remove INBOX label to archive
-        service.users().messages().batchModify(
-            userId='me',
-            body={
-                'ids': params.message_ids,
-                'removeLabelIds': ['INBOX']
-            }
-        ).execute()
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Archived {len(params.message_ids)} email(s)"
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-class UnarchiveEmailsInput(BaseModel):
-    """Input for unarchiving emails."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    message_ids: List[str] = Field(..., min_length=1, description="List of message IDs to unarchive")
-
-@mcp.tool(name="unarchive_emails")
-async def unarchive_emails(params: UnarchiveEmailsInput) -> str:
-    """Unarchive one or more emails (move back to INBOX)."""
-    try:
-        service = get_gmail_service()
-        
-        # Add INBOX label to unarchive
-        service.users().messages().batchModify(
-            userId='me',
-            body={
-                'ids': params.message_ids,
-                'addLabelIds': ['INBOX']
-            }
-        ).execute()
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Unarchived {len(params.message_ids)} email(s)"
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-class DeleteEmailsInput(BaseModel):
-    """Input for deleting emails."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    message_ids: List[str] = Field(..., min_length=1, description="List of message IDs to delete (move to trash)")
-
-@mcp.tool(name="delete_emails")
-async def delete_emails(params: DeleteEmailsInput) -> str:
-    """Delete one or more emails (move to trash)."""
-    try:
-        service = get_gmail_service()
-        
-        # Trash messages
-        service.users().messages().batchModify(
-            userId='me',
-            body={
-                'ids': params.message_ids,
-                'addLabelIds': ['TRASH']
-            }
-        ).execute()
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Deleted {len(params.message_ids)} email(s)"
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-class AddLabelInput(BaseModel):
-    """Input for adding labels to emails."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    message_ids: List[str] = Field(..., min_length=1, description="List of message IDs")
-    label_ids: List[str] = Field(..., min_length=1, description="List of label IDs to add")
-
-@mcp.tool(name="add_labels_to_emails")
-async def add_labels_to_emails(params: AddLabelInput) -> str:
-    """Add labels to one or more emails."""
-    try:
-        service = get_gmail_service()
-        
-        service.users().messages().batchModify(
-            userId='me',
-            body={
-                'ids': params.message_ids,
-                'addLabelIds': params.label_ids
-            }
-        ).execute()
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Added {len(params.label_ids)} label(s) to {len(params.message_ids)} email(s)"
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-class RemoveLabelInput(BaseModel):
-    """Input for removing labels from emails."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    message_ids: List[str] = Field(..., min_length=1, description="List of message IDs")
-    label_ids: List[str] = Field(..., min_length=1, description="List of label IDs to remove")
-
-@mcp.tool(name="remove_labels_from_emails")
-async def remove_labels_from_emails(params: RemoveLabelInput) -> str:
-    """Remove labels from one or more emails."""
-    try:
-        service = get_gmail_service()
-        
-        service.users().messages().batchModify(
-            userId='me',
-            body={
-                'ids': params.message_ids,
-                'removeLabelIds': params.label_ids
-            }
-        ).execute()
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Removed {len(params.label_ids)} label(s) from {len(params.message_ids)} email(s)"
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-@mcp.tool(name="list_gmail_labels")
-async def list_gmail_labels() -> str:
-    """List all available Gmail labels."""
-    try:
-        service = get_gmail_service()
-        
-        results = service.users().labels().list(userId='me').execute()
-        labels = results.get('labels', [])
-        
-        if not labels:
-            return "No labels found."
-        
-        lines = [f"# Gmail Labels ({len(labels)} total)\n"]
-        
-        # Separate system and user labels
-        system_labels = [l for l in labels if l['type'] == 'system']
-        user_labels = [l for l in labels if l['type'] == 'user']
-        
-        if system_labels:
-            lines.append("## System Labels\n")
-            for label in system_labels:
-                lines.append(f"**{label['name']}** - ID: `{label['id']}`")
-        
-        if user_labels:
-            lines.append("\n## Your Custom Labels\n")
-            for label in user_labels:
-                lines.append(f"**{label['name']}** - ID: `{label['id']}`")
-        
-        return "\n".join(lines)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-class SendEmailInput(BaseModel):
-    """Input for sending an email."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    to: str = Field(..., min_length=1, description="Recipient email address")
-    subject: str = Field(..., min_length=1, max_length=200)
-    body: str = Field(..., min_length=1)
-    cc: Optional[str] = Field(default=None, description="CC email address(es), comma-separated")
-    bcc: Optional[str] = Field(default=None, description="BCC email address(es), comma-separated")
-
-@mcp.tool(name="send_email")
-async def send_email(params: SendEmailInput) -> str:
-    """Send an email via Gmail."""
-    try:
-        import base64
-        from email.mime.text import MIMEText
-        
-        service = get_gmail_service()
-        
-        # Create message
-        message = MIMEText(params.body)
-        message['to'] = params.to
-        message['subject'] = params.subject
-        
-        if params.cc:
-            message['cc'] = params.cc
-        if params.bcc:
-            message['bcc'] = params.bcc
-        
-        # Encode message
-        raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
-        
-        # Send message
-        sent_message = service.users().messages().send(
-            userId='me',
-            body={'raw': raw_message}
-        ).execute()
-        
-        return json.dumps({
-            "success": True,
-            "message": "Email sent successfully",
-            "message_id": sent_message['id']
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-class CreateDraftInput(BaseModel):
-    """Input for creating a draft email."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    to: str = Field(..., min_length=1, description="Recipient email address")
-    subject: str = Field(..., min_length=1, max_length=200)
-    body: str = Field(..., min_length=1)
-    cc: Optional[str] = Field(default=None, description="CC email address(es), comma-separated")
-    bcc: Optional[str] = Field(default=None, description="BCC email address(es), comma-separated")
-
-@mcp.tool(name="create_email_draft")
-async def create_email_draft(params: CreateDraftInput) -> str:
-    """Create a draft email in Gmail."""
-    try:
-        import base64
-        from email.mime.text import MIMEText
-        
-        service = get_gmail_service()
-        
-        # Create message
-        message = MIMEText(params.body)
-        message['to'] = params.to
-        message['subject'] = params.subject
-        
-        if params.cc:
-            message['cc'] = params.cc
-        if params.bcc:
-            message['bcc'] = params.bcc
-        
-        # Encode message
-        raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
-        
-        # Create draft
-        draft = service.users().drafts().create(
-            userId='me',
-            body={'message': {'raw': raw_message}}
-        ).execute()
-        
-        return json.dumps({
-            "success": True,
-            "message": "Draft created successfully",
-            "draft_id": draft['id']
-        }, indent=2)
-        
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-# ============================================================================
-# GOOGLE KEEP TOOLS
-# ============================================================================
-
-@mcp.tool(name="list_google_keep_notes")
-async def list_google_keep_notes(max_results: int = 20) -> str:
-    """List notes from Google Keep. Use to find quick notes, grocery lists, and ideas."""
-    try:
-        service = get_keep_service()
-        
-        notes = service.notes().list(pageSize=max_results).execute()
-        items = notes.get('notes', [])
-        
-        if not items:
-            return "No Keep notes found."
-        
-        lines = [f"# Your Keep Notes ({len(items)} total)\n"]
-        
-        for note in items:
-            title = note.get('title', 'Untitled')
-            text = note.get('textContent', '')[:100]  # First 100 chars
-            is_list = 'listContent' in note
-            
-            list_emoji = "📝" if is_list else "💭"
-            
-            lines.append(f"{list_emoji} **{title}**")
-            if text:
-                lines.append(f"  {text}...")
-            
-            # Show list items if it's a list
-            if is_list:
-                list_items = note.get('listContent', {}).get('listItems', [])
-                checked = sum(1 for item in list_items if item.get('checked'))
-                total = len(list_items)
-                lines.append(f"  ✅ {checked}/{total} items checked")
-            
-            lines.append(f"  🆔 Note ID: `{note['name']}`\n")
-        
-        return "\n".join(lines)
-        
-    except Exception as e:
-        # Google Keep API might not be available for service accounts
-        return json.dumps({
-            "success": False, 
-            "error": "Keep API not available for service accounts. You may need to use the Claude-native Google integrations instead."
-        }, indent=2)
-
-@mcp.tool(name="read_keep_note")
-async def read_keep_note(note_id: str) -> str:
-    """Read the full contents of a Keep note, including list items."""
-    try:
-        service = get_keep_service()
-        
-        note = service.notes().get(name=note_id).execute()
-        
-        title = note.get('title', 'Untitled')
-        is_list = 'listContent' in note
-        
-        lines = [f"# {title}\n"]
-        
-        if is_list:
-            lines.append("## List Items:\n")
-            list_items = note.get('listContent', {}).get('listItems', [])
-            
-            unchecked = [item for item in list_items if not item.get('checked')]
-            checked = [item for item in list_items if item.get('checked')]
-            
-            if unchecked:
-                lines.append("### 📌 To Get:")
-                for item in unchecked:
-                    text = item.get('text', {}).get('text', 'No text')
-                    lines.append(f"- [ ] {text}")
-                lines.append("")
-            
-            if checked:
-                lines.append("### ✅ Already Have:")
-                for item in checked:
-                    text = item.get('text', {}).get('text', 'No text')
-                    lines.append(f"- [x] {text}")
-        else:
-            text = note.get('textContent', '')
-            lines.append(text)
-        
-        return "\n".join(lines)
-        
-    except Exception as e:
-        return json.dumps({
-            "success": False,
-            "error": "Keep API not available for service accounts. You may need to use the Claude-native Google integrations instead."
-        }, indent=2)
-
-# ============================================================================
-# SERVER STARTUP (DO NOT MODIFY - THIS IS THE WORKING VERSION)
+# SERVER STARTUP
 # ============================================================================
 
 if __name__ == "__main__":
