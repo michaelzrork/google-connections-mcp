@@ -819,14 +819,14 @@ class ReadSheetInput(BaseModel):
 #     except Exception as e:
 #         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-# class WriteSheetInput(BaseModel):
-#     """Input for writing to a sheet."""
-#     model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+class WriteSheetInput(BaseModel):
+    """Input for writing to a sheet."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
     
-#     spreadsheet_id: str = Field(..., min_length=1)
-#     worksheet_name: str = Field(..., min_length=1)
-#     range: str = Field(..., min_length=1)
-#     values: List[List[Any]] = Field(..., min_length=1)
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    range: str = Field(..., min_length=1)
+    values: List[List[Any]] = Field(..., min_length=1)
 
 @mcp.tool(name="write_to_sheet")
 async def write_to_sheet(params: WriteSheetInput) -> str:
