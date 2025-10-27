@@ -10,3 +10,5 @@ venv/
 credentials.json
 *.log
 desktop.ini
+desktop.ini
+Desktop.ini
