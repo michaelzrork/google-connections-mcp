@@ -37,6 +37,132 @@ def get_sheets_client():
     return client
 
 # ============================================================================
+# ROW MANIPULATION TOOLS
+# ============================================================================
+
+class FindRowByIdInput(BaseModel):
+    """Input for finding a row by ID."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    id_column: str = Field(..., min_length=1, description="Column name containing IDs (e.g., 'ID')")
+    id_value: str = Field(..., min_length=1, description="The ID value to search for")
+
+@mcp.tool(name="find_row_by_id")
+async def find_row_by_id(params: FindRowByIdInput) -> str:
+    """Find the row number for a specific ID value."""
+    try:
+        client = get_sheets_client()
+        spreadsheet = client.open_by_key(params.spreadsheet_id)
+        worksheet = spreadsheet.worksheet(params.worksheet_name)
+        
+        all_values = worksheet.get_all_values()
+        if not all_values:
+            return json.dumps({"success": False, "error": "Worksheet is empty"}, indent=2)
+        
+        header = all_values[0]
+        try:
+            id_col_index = header.index(params.id_column)
+        except ValueError:
+            return json.dumps({"success": False, "error": f"Column '{params.id_column}' not found"}, indent=2)
+        
+        for row_num, row in enumerate(all_values[1:], start=2):
+            if id_col_index < len(row) and row[id_col_index] == params.id_value:
+                return json.dumps({
+                    "success": True,
+                    "row_number": row_num,
+                    "row_data": dict(zip(header, row))
+                }, indent=2)
+        
+        return json.dumps({"success": False, "error": f"No row found with {params.id_column}='{params.id_value}'"}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+class UpdateRowByIdInput(BaseModel):
+    """Input for updating a row by ID."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    id_column: str = Field(..., min_length=1)
+    id_value: str = Field(..., min_length=1)
+    updates: Dict[str, Any] = Field(..., description="Dictionary of column_name: new_value pairs")
+
+@mcp.tool(name="update_row_by_id")
+async def update_row_by_id(params: UpdateRowByIdInput) -> str:
+    """Update specific columns in a row by ID. Only updates specified columns."""
+    try:
+        client = get_sheets_client()
+        spreadsheet = client.open_by_key(params.spreadsheet_id)
+        worksheet = spreadsheet.worksheet(params.worksheet_name)
+        
+        all_values = worksheet.get_all_values()
+        if not all_values:
+            return json.dumps({"success": False, "error": "Worksheet is empty"}, indent=2)
+        
+        header = all_values[0]
+        id_col_index = header.index(params.id_column)
+        
+        target_row_num = None
+        target_row_data = None
+        
+        for row_num, row in enumerate(all_values[1:], start=2):
+            if id_col_index < len(row) and row[id_col_index] == params.id_value:
+                target_row_num = row_num
+                target_row_data = list(row)
+                break
+        
+        if target_row_num is None:
+            return json.dumps({"success": False, "error": f"No row found"}, indent=2)
+        
+        for col_name, new_value in params.updates.items():
+            col_index = header.index(col_name)
+            while len(target_row_data) <= col_index:
+                target_row_data.append('')
+            target_row_data[col_index] = str(new_value)
+        
+        range_to_update = f"A{target_row_num}:{chr(65 + len(target_row_data) - 1)}{target_row_num}"
+        worksheet.update(range_to_update, [target_row_data])
+        
+        return json.dumps({"success": True, "message": f"Updated row {target_row_num}"}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+class DeleteRowByIdInput(BaseModel):
+    """Input for deleting a row by ID."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+    
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    id_column: str = Field(..., min_length=1)
+    id_value: str = Field(..., min_length=1)
+
+@mcp.tool(name="delete_row_by_id")
+async def delete_row_by_id(params: DeleteRowByIdInput) -> str:
+    """Delete a row by ID. Completely removes it from the sheet."""
+    try:
+        client = get_sheets_client()
+        spreadsheet = client.open_by_key(params.spreadsheet_id)
+        worksheet = spreadsheet.worksheet(params.worksheet_name)
+        
+        all_values = worksheet.get_all_values()
+        if not all_values:
+            return json.dumps({"success": False, "error": "Worksheet is empty"}, indent=2)
+        
+        header = all_values[0]
+        id_col_index = header.index(params.id_column)
+        
+        for row_num, row in enumerate(all_values[1:], start=2):
+            if id_col_index < len(row) and row[id_col_index] == params.id_value:
+                worksheet.delete_rows(row_num)
+                return json.dumps({"success": True, "message": f"Deleted row {row_num}"}, indent=2)
+        
+        return json.dumps({"success": False, "error": "Row not found"}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+# ============================================================================
 # HELPER FUNCTIONS FOR PRIORITY PARSING
 # ============================================================================
 
