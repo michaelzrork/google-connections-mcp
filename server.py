@@ -164,7 +164,12 @@ async def export_sheet_as_csv(
         Success message with file path
     """
     try:
-        # ADD THIS LINE:
+        import csv
+        import os
+        
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
         client = get_sheets_client()
         
         # Get the worksheet
@@ -175,7 +180,6 @@ async def export_sheet_as_csv(
         all_values = worksheet.get_all_values()
         
         # Write to CSV
-        import csv
         with open(output_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerows(all_values)
