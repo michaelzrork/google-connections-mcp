@@ -397,6 +397,269 @@ def date_summary(df: pd.DataFrame, options: dict) -> dict:
     return {"error": "Must specify target_date"}
 
 # ============================================================================
+# DAILY TRACKING HELPER FUNCTIONS
+# ============================================================================
+
+# Get default spreadsheet ID from environment
+DEFAULT_SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
+
+@mcp.tool(name="log_accomplishment")
+async def log_accomplishment(
+    date: str,
+    time: str,
+    category: str,
+    accomplishment: str,
+    notes: str = ""
+) -> str:
+    """Quick log an accomplishment to the Accomplishments sheet."""
+    try:
+        import uuid
+        client = get_sheets_client()
+        spreadsheet = client.open_by_key(DEFAULT_SPREADSHEET_ID)
+        worksheet = spreadsheet.worksheet('Accomplishments')
+        
+        # Generate unique ID
+        accomplishment_id = str(uuid.uuid4())
+        
+        # Append row
+        worksheet.append_row([date, time, category, accomplishment, notes, accomplishment_id])
+        
+        return json.dumps({
+            "success": True,
+            "message": "Accomplishment logged"
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+@mcp.tool(name="get_actionable_tasks")
+async def get_actionable_tasks(limit: int = 20) -> str:
+    """Get incomplete tasks that are actionable today."""
+    try:
+        client = get_sheets_client()
+        spreadsheet = client.open_by_key(DEFAULT_SPREADSHEET_ID)
+        worksheet = spreadsheet.worksheet('Tasks')
+        
+        # Get all data
+        data = worksheet.get_all_values()
+        if not data:
+            return json.dumps({"success": True, "tasks": []}, indent=2)
+        
+        df = pd.DataFrame(data[1:], columns=data[0])
+        
+        # Filter incomplete tasks
+        df = df[df['Status'] == 'FALSE']
+        
+        # Filter by Do Date (today or earlier, or blank)
+        today = datetime.now().strftime('%Y-%m-%d')
+        df = df[
+            (df['Do Date'] <= today) | 
+            (df['Do Date'].isna()) | 
+            (df['Do Date'] == '')
+        ]
+        
+        # Limit results
+        df = df.head(limit)
+        
+        # Return as list
+        tasks = df.to_dict('records')
+        
+        return json.dumps({
+            "success": True,
+            "tasks": tasks,
+            "count": len(tasks)
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+@mcp.tool(name="create_task")
+async def create_task(
+    task: str,
+    category: str = "",
+    projects: str = "",
+    tags: str = "",
+    do_date: str = "",
+    due_date: str = "",
+    due_time: str = "",
+    urgent: str = "FALSE",
+    important: str = "FALSE",
+    priority: str = "",
+    location: str = "",
+    notes: str = ""
+) -> str:
+    """Create a new task in the Tasks sheet."""
+    try:
+        import uuid
+        client = get_sheets_client()
+        spreadsheet = client.open_by_key(DEFAULT_SPREADSHEET_ID)
+        worksheet = spreadsheet.worksheet('Tasks')
+        
+        created_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Append row with all columns
+        worksheet.append_row([
+            created_date,  # Created Date
+            "",           # Completed Date
+            "FALSE",      # Status
+            task,         # Task
+            tags,         # Tags
+            category,     # Category
+            projects,     # Projects
+            do_date,      # Do Date
+            due_date,     # Due Date
+            due_time,     # Due Time
+            urgent,       # Urgent
+            important,    # Important
+            priority,     # Priority
+            location,     # Location
+            notes,        # Notes
+            "",           # Recurring
+            ""            # Recurring Schedule
+        ])
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Task created: {task}"
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+@mcp.tool(name="mark_task_complete")
+async def mark_task_complete(
+    task_name: str,
+    completed_date: str = ""
+) -> str:
+    """Find a task by name and mark it complete."""
+    try:
+        client = get_sheets_client()
+        spreadsheet = client.open_by_key(DEFAULT_SPREADSHEET_ID)
+        worksheet = spreadsheet.worksheet('Tasks')
+        
+        if not completed_date:
+            completed_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Get all data
+        data = worksheet.get_all_values()
+        if not data:
+            return json.dumps({"success": False, "error": "No tasks found"}, indent=2)
+        
+        # Find the task
+        for i, row in enumerate(data[1:], start=2):  # Start at row 2 (skip header)
+            if row[3] == task_name and row[2] == 'FALSE':  # Task column is index 3, Status is index 2
+                # Update Status (column C) and Completed Date (column B)
+                worksheet.update_cell(i, 3, 'TRUE')  # Status
+                worksheet.update_cell(i, 2, completed_date)  # Completed Date
+                
+                return json.dumps({
+                    "success": True,
+                    "message": f"Task marked complete: {task_name}"
+                }, indent=2)
+        
+        return json.dumps({
+            "success": False,
+            "error": f"Task not found or already complete: {task_name}"
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+@mcp.tool(name="set_daily_priorities")
+async def set_daily_priorities(
+    date: str,
+    priorities: List[Dict[str, str]]
+) -> str:
+    """
+    Set the day's priorities in the Daily Priorities sheet.
+    
+    priorities format: [
+        {'number': 1, 'task': 'Apply to 3 jobs', 'status': '', 'notes': ''},
+        {'number': 2, 'task': 'Install Docker', 'status': '', 'notes': ''}
+    ]
+    """
+    try:
+        client = get_sheets_client()
+        spreadsheet = client.open_by_key(DEFAULT_SPREADSHEET_ID)
+        worksheet = spreadsheet.worksheet('Daily Priorities')
+        
+        # Format priorities into cell content
+        lines = []
+        for p in priorities:
+            num = p.get('number', '')
+            task = p.get('task', '')
+            status = p.get('status', '')
+            notes = p.get('notes', '')
+            lines.append(f"{num}. {task} | {status} | {notes}")
+        
+        priorities_text = '\n'.join(lines)
+        
+        # Append new row with date and priorities
+        worksheet.append_row([date, priorities_text])
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Set {len(priorities)} priorities for {date}"
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+@mcp.tool(name="update_priority_status")
+async def update_priority_status(
+    date: str,
+    priority_number: int,
+    status: str,
+    notes: str = ""
+) -> str:
+    """Update the status of a specific priority for a given date."""
+    try:
+        client = get_sheets_client()
+        spreadsheet = client.open_by_key(DEFAULT_SPREADSHEET_ID)
+        worksheet = spreadsheet.worksheet('Daily Priorities')
+        
+        # Get all data
+        data = worksheet.get_all_values()
+        if not data:
+            return json.dumps({"success": False, "error": "No priorities found"}, indent=2)
+        
+        # Find the date row
+        for i, row in enumerate(data[1:], start=2):  # Start at row 2 (skip header)
+            if row[0] == date:  # Date is in column A
+                # Parse current priorities
+                current_priorities = parse_priorities_cell(row[1])
+                
+                # Update the specific priority
+                for p in current_priorities:
+                    if p['number'] == priority_number:
+                        p['status'] = status
+                        if notes:
+                            p['notes'] = notes
+                
+                # Format back to cell content
+                lines = []
+                for p in current_priorities:
+                    lines.append(f"{p['number']}. {p['task']} | {p['status']} | {p['notes']}")
+                
+                updated_text = '\n'.join(lines)
+                
+                # Write back to cell
+                worksheet.update_cell(i, 2, updated_text)  # Column B
+                
+                return json.dumps({
+                    "success": True,
+                    "message": f"Updated priority {priority_number} for {date}"
+                }, indent=2)
+        
+        return json.dumps({
+            "success": False,
+            "error": f"No priorities found for date: {date}"
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+# ============================================================================
 # BASIC CRUD OPERATIONS (Keep these for writing)
 # ============================================================================
 
