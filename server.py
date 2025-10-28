@@ -906,3 +906,208 @@ if __name__ == "__main__":
     )
     
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+# ============================================================================
+# ADDITIONS: safer defaults, Task IDs, date parsing, and ID-based operations
+# ============================================================================
+
+from typing import Optional, Union
+import pandas as pd
+from datetime import datetime
+import json
+
+# --- Defaults & helpers ---
+DEFAULT_SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", DEFAULT_SPREADSHEET_ID if 'DEFAULT_SPREADSHEET_ID' in globals() else "")
+
+def resolve_sheet(spreadsheet_id: Optional[str], worksheet_name: str):
+    sid = spreadsheet_id or DEFAULT_SPREADSHEET_ID
+    if not sid:
+        raise RuntimeError("No spreadsheet_id provided and SPREADSHEET_ID env var is empty.")
+    client = get_sheets_client()
+    spreadsheet = client.open_by_key(sid)
+    worksheet = spreadsheet.worksheet(worksheet_name)
+    return client, spreadsheet, worksheet
+
+def col_to_a1(col_idx: int) -> str:
+    s = ""
+    while col_idx > 0:
+        col_idx, rem = divmod(col_idx - 1, 26)
+        s = chr(65 + rem) + s
+    return s
+
+@mcp.tool(name="get_defaults")
+async def get_defaults() -> str:
+    try:
+        sid = DEFAULT_SPREADSHEET_ID
+        if not sid:
+            return json.dumps({"success": True, "spreadsheet_id": "", "worksheets": []}, indent=2)
+        client = get_sheets_client()
+        ss = client.open_by_key(sid)
+        wsn = [ws.title for ws in ss.worksheets()]
+        return json.dumps({"success": True, "spreadsheet_id": sid, "worksheets": wsn}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+@mcp.tool(name="create_task_v2")
+async def create_task_v2(
+    task: str,
+    category: str = "",
+    projects: str = "",
+    tags: str = "",
+    do_date: str = "",
+    due_date: str = "",
+    due_time: str = "",
+    urgent: str = "FALSE",
+    important: str = "FALSE",
+    priority: str = "",
+    location: str = "",
+    notes: str = "",
+    spreadsheet_id: str = ""
+) -> str:
+    try:
+        import uuid
+        _, _, worksheet = resolve_sheet(spreadsheet_id or None, "Tasks")
+        data = worksheet.get_all_values()
+        if not data:
+            return json.dumps({"success": False, "error": "Tasks sheet not found or empty"}, indent=2)
+        header = data[0]
+        if "Task ID" not in header:
+            header.append("Task ID")
+            worksheet.update(f"A1:{col_to_a1(len(header))}1", [header])
+            data = worksheet.get_all_values()
+            header = data[0]
+
+        task_id = str(uuid.uuid4())
+        row_map = {
+            "Created Date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Completed Date": "",
+            "Status": "FALSE",
+            "Task": task,
+            "Tags": tags,
+            "Category": category,
+            "Projects": projects,
+            "Do Date": do_date,
+            "Due Date": due_date,
+            "Due Time": due_time,
+            "Urgent": urgent,
+            "Important": important,
+            "Priority": priority,
+            "Location": location,
+            "Notes": notes,
+            "Task ID": task_id,
+        }
+        new_row = [row_map.get(col, "") for col in header]
+        worksheet.append_row(new_row, value_input_option="USER_ENTERED")
+        return json.dumps({"success": True, "message": "Task created", "task_id": task_id}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+@mcp.tool(name="get_actionable_tasks_v2")
+async def get_actionable_tasks_v2(limit: int = 20, spreadsheet_id: str = "") -> str:
+    try:
+        _, _, worksheet = resolve_sheet(spreadsheet_id or None, "Tasks")
+        data = worksheet.get_all_values()
+        if not data:
+            return json.dumps({"success": True, "tasks": [], "count": 0}, indent=2)
+
+        df = pd.DataFrame(data[1:], columns=data[0])
+        for col in ["Do Date", "Due Date"]:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+        today = datetime.now().date()
+
+        if "Status" in df.columns:
+            df = df[df["Status"] == "FALSE"]
+
+        if "Do Date" in df.columns:
+            df = df[(df["Do Date"].isna()) | (df["Do Date"] <= today)]
+
+        tasks = df.to_dict(orient="records")[:limit]
+        return json.dumps({"success": True, "tasks": tasks, "count": len(tasks)}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+@mcp.tool(name="set_task_status")
+async def set_task_status(
+    task_id: str,
+    status: str,   # OPEN | DONE | CANCELED
+    spreadsheet_id: str = ""
+) -> str:
+    try:
+        _, _, ws = resolve_sheet(spreadsheet_id or None, "Tasks")
+        data = ws.get_all_values()
+        if not data:
+            return json.dumps({"success": False, "error": "No tasks found"}, indent=2)
+        header = data[0]
+        if "Task ID" not in header:
+            return json.dumps({"success": False, "error": "Task ID column missing"}, indent=2)
+
+        id_idx = header.index("Task ID")
+        status_idx = header.index("Status") if "Status" in header else None
+        comp_idx = header.index("Completed Date") if "Completed Date" in header else None
+        notes_idx = header.index("Notes") if "Notes" in header else None
+
+        target_row = None
+        for r_i, row in enumerate(data[1:], start=2):
+            if len(row) > id_idx and row[id_idx] == task_id:
+                target_row = r_i
+                break
+        if not target_row:
+            return json.dumps({"success": False, "error": "Task ID not found"}, indent=2)
+
+        st = status.upper().strip()
+        if st == "OPEN":
+            if status_idx is not None:
+                ws.update_cell(target_row, status_idx+1, "FALSE")
+            if comp_idx is not None:
+                ws.update_cell(target_row, comp_idx+1, "")
+        elif st == "DONE":
+            if status_idx is not None:
+                ws.update_cell(target_row, status_idx+1, "TRUE")
+            if comp_idx is not None:
+                ws.update_cell(target_row, comp_idx+1, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        elif st == "CANCELED":
+            if status_idx is not None:
+                ws.update_cell(target_row, status_idx+1, "FALSE")
+            if notes_idx is not None:
+                prev = data[target_row-1][notes_idx] if len(data[target_row-1]) > notes_idx else ""
+                new_notes = (prev + f" | CANCELED {datetime.now().strftime('%Y-%m-%d')}").strip(" |")
+                ws.update_cell(target_row, notes_idx+1, new_notes)
+        else:
+            return json.dumps({"success": False, "error": "Unknown status. Use OPEN|DONE|CANCELED"}, indent=2)
+
+        return json.dumps({"success": True, "task_id": task_id, "status": st}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+@mcp.tool(name="archive_task")
+async def archive_task(task_id: str, spreadsheet_id: str = "") -> str:
+    try:
+        _, _, ws = resolve_sheet(spreadsheet_id or None, "Tasks")
+        data = ws.get_all_values()
+        if not data:
+            return json.dumps({"success": False, "error": "No tasks found"}, indent=2)
+        header = data[0]
+        if "Task ID" not in header:
+            return json.dumps({"success": False, "error": "Task ID column missing"}, indent=2)
+        if "Archived" not in header:
+            header.append("Archived")
+            ws.update(f"A1:{col_to_a1(len(header))}1", [header])
+            data = ws.get_all_values()
+            header = data[0]
+
+        id_idx = header.index("Task ID")
+        arch_idx = header.index("Archived")
+
+        target_row = None
+        for r_i, row in enumerate(data[1:], start=2):
+            if len(row) > id_idx and row[id_idx] == task_id:
+                target_row = r_i
+                break
+        if not target_row:
+            return json.dumps({"success": False, "error": "Task ID not found"}, indent=2)
+
+        ws.update_cell(target_row, arch_idx+1, "TRUE")
+        return json.dumps({"success": True, "archived": True, "task_id": task_id}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
