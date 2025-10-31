@@ -1055,7 +1055,7 @@ async def oauth_callback(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 @fastapi_app.get("/health")
-async def health_check():
+async def health_check(request: Request):
     """Health check endpoint"""
     return {"status": "ok", "service": "Daily Tracking MCP"}
 
