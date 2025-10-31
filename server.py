@@ -16,6 +16,12 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import Flow
+from googleapiclient.discovery import build
+import os
+from datetime import datetime
+
 # Initialize MCP server
 mcp = FastMCP("Daily Tracking")
 
@@ -35,6 +41,49 @@ def get_sheets_client():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     return client
+
+# ============================================================================
+# Google Calendar OAuth Setup
+# ============================================================================
+
+CALENDAR_SCOPES = [
+    'https://www.googleapis.com/auth/calendar',
+    'https://www.googleapis.com/auth/calendar.events'
+]
+
+def get_calendar_service():
+    """Get authenticated Google Calendar service"""
+    creds = None
+    
+    # Check if we have stored credentials
+    if os.path.exists('calendar_token.json'):
+        creds = Credentials.from_authorized_user_file('calendar_token.json', CALENDAR_SCOPES)
+    
+    # If no valid credentials, need to authenticate
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            # You'll need to set up OAuth credentials in Google Cloud Console
+            # and download the credentials.json file
+            flow = Flow.from_client_secrets_file(
+                'calendar_credentials.json',
+                scopes=CALENDAR_SCOPES,
+                redirect_uri='urn:ietf:wg:oauth:2.0:oob'  # For desktop apps
+            )
+            
+            auth_url, _ = flow.authorization_url(prompt='consent')
+            print(f'Please visit this URL to authorize: {auth_url}')
+            
+            code = input('Enter the authorization code: ')
+            flow.fetch_token(code=code)
+            creds = flow.credentials
+        
+        # Save credentials for next time
+        with open('calendar_token.json', 'w') as token:
+            token.write(creds.to_json())
+    
+    return build('calendar', 'v3', credentials=creds)
 
 # ============================================================================
 # ROW MANIPULATION TOOLS
@@ -872,6 +921,268 @@ async def append_rows(params: AppendRowsInput) -> str:
         
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# ============================================================================
+# GOOGLE CALENDAR INTEGRATION
+# ============================================================================
+
+@server.call_tool()
+async def list_calendars(page_token: str = None) -> list[types.TextContent]:
+    """List all available calendars"""
+    try:
+        service = get_calendar_service()
+        calendars_result = service.calendarList().list(
+            pageToken=page_token
+        ).execute()
+        
+        calendars = calendars_result.get('items', [])
+        
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({
+                "success": True,
+                "calendars": calendars,
+                "nextPageToken": calendars_result.get('nextPageToken')
+            }, indent=2)
+        )]
+    except Exception as e:
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({"success": False, "error": str(e)}, indent=2)
+        )]
+
+
+@server.call_tool()
+async def list_calendar_events(
+    calendar_id: str = "primary",
+    time_min: str = None,
+    time_max: str = None,
+    max_results: int = 25,
+    query: str = None,
+    page_token: str = None
+) -> list[types.TextContent]:
+    """
+    List events from a calendar
+    
+    Args:
+        calendar_id: Calendar ID (default 'primary')
+        time_min: Lower bound for event's end time (RFC3339 timestamp)
+        time_max: Upper bound for event's start time (RFC3339 timestamp)
+        max_results: Maximum number of events
+        query: Free text search terms
+        page_token: Token for pagination
+    """
+    try:
+        service = get_calendar_service()
+        
+        events_result = service.events().list(
+            calendarId=calendar_id,
+            timeMin=time_min,
+            timeMax=time_max,
+            maxResults=max_results,
+            singleEvents=True,
+            orderBy='startTime',
+            q=query,
+            pageToken=page_token
+        ).execute()
+        
+        events = events_result.get('items', [])
+        
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({
+                "success": True,
+                "events": events,
+                "nextPageToken": events_result.get('nextPageToken')
+            }, indent=2)
+        )]
+    except Exception as e:
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({"success": False, "error": str(e)}, indent=2)
+        )]
+
+
+@server.call_tool()
+async def get_calendar_event(
+    calendar_id: str,
+    event_id: str
+) -> list[types.TextContent]:
+    """Get a specific calendar event"""
+    try:
+        service = get_calendar_service()
+        event = service.events().get(
+            calendarId=calendar_id,
+            eventId=event_id
+        ).execute()
+        
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({
+                "success": True,
+                "event": event
+            }, indent=2)
+        )]
+    except Exception as e:
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({"success": False, "error": str(e)}, indent=2)
+        )]
+
+
+@server.call_tool()
+async def create_calendar_event(
+    calendar_id: str,
+    summary: str,
+    start_time: str,
+    end_time: str,
+    description: str = None,
+    location: str = None,
+    attendees: list = None,
+    reminders: dict = None
+) -> list[types.TextContent]:
+    """
+    Create a calendar event
+    
+    Args:
+        calendar_id: Calendar ID to create event in
+        summary: Event title
+        start_time: Start time (RFC3339 format: 2025-10-31T10:00:00-04:00)
+        end_time: End time (RFC3339 format)
+        description: Event description
+        location: Event location
+        attendees: List of attendee emails
+        reminders: Reminder settings dict
+    """
+    try:
+        service = get_calendar_service()
+        
+        event_body = {
+            'summary': summary,
+            'start': {
+                'dateTime': start_time,
+                'timeZone': 'America/New_York'
+            },
+            'end': {
+                'dateTime': end_time,
+                'timeZone': 'America/New_York'
+            }
+        }
+        
+        if description:
+            event_body['description'] = description
+        if location:
+            event_body['location'] = location
+        if attendees:
+            event_body['attendees'] = [{'email': email} for email in attendees]
+        if reminders:
+            event_body['reminders'] = reminders
+        
+        event = service.events().insert(
+            calendarId=calendar_id,
+            body=event_body
+        ).execute()
+        
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({
+                "success": True,
+                "event": event,
+                "event_link": event.get('htmlLink')
+            }, indent=2)
+        )]
+    except Exception as e:
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({"success": False, "error": str(e)}, indent=2)
+        )]
+
+
+@server.call_tool()
+async def update_calendar_event(
+    calendar_id: str,
+    event_id: str,
+    summary: str = None,
+    start_time: str = None,
+    end_time: str = None,
+    description: str = None,
+    location: str = None
+) -> list[types.TextContent]:
+    """Update an existing calendar event"""
+    try:
+        service = get_calendar_service()
+        
+        # Get existing event
+        event = service.events().get(
+            calendarId=calendar_id,
+            eventId=event_id
+        ).execute()
+        
+        # Update fields
+        if summary:
+            event['summary'] = summary
+        if start_time:
+            event['start'] = {
+                'dateTime': start_time,
+                'timeZone': 'America/New_York'
+            }
+        if end_time:
+            event['end'] = {
+                'dateTime': end_time,
+                'timeZone': 'America/New_York'
+            }
+        if description:
+            event['description'] = description
+        if location:
+            event['location'] = location
+        
+        updated_event = service.events().update(
+            calendarId=calendar_id,
+            eventId=event_id,
+            body=event
+        ).execute()
+        
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({
+                "success": True,
+                "event": updated_event
+            }, indent=2)
+        )]
+    except Exception as e:
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({"success": False, "error": str(e)}, indent=2)
+        )]
+
+
+@server.call_tool()
+async def delete_calendar_event(
+    calendar_id: str,
+    event_id: str
+) -> list[types.TextContent]:
+    """Delete a calendar event"""
+    try:
+        service = get_calendar_service()
+        
+        service.events().delete(
+            calendarId=calendar_id,
+            eventId=event_id
+        ).execute()
+        
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({
+                "success": True,
+                "message": f"Event {event_id} deleted successfully"
+            }, indent=2)
+        )]
+    except Exception as e:
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({"success": False, "error": str(e)}, indent=2)
+        )]
 
 # ============================================================================
 # SERVER STARTUP
