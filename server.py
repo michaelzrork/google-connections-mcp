@@ -987,15 +987,12 @@ async def start_oauth(request: Request):
         
         credentials_info = json.loads(credentials_json)
         
-        # Build redirect URI from request
+        # Build redirect URI - force HTTPS for Railway
         base_url = str(request.base_url).rstrip('/')
+        # Railway uses a proxy, so internal requests are HTTP but external are HTTPS
+        if base_url.startswith('http://'):
+            base_url = base_url.replace('http://', 'https://', 1)
         redirect_uri = f"{base_url}/oauth/callback"
-        
-        # TEMPORARY LOGGING - remove after debugging
-        print(f"DEBUG: base_url = {base_url}")
-        print(f"DEBUG: redirect_uri = {redirect_uri}")
-        print(f"DEBUG: request.url = {request.url}")
-        print(f"DEBUG: request.base_url = {request.base_url}")
         
         flow = Flow.from_client_config(
             credentials_info,
@@ -1027,8 +1024,10 @@ async def oauth_callback(request: Request):
         credentials_json = os.environ.get('CALENDAR_CREDENTIALS')
         credentials_info = json.loads(credentials_json)
         
-        # Build redirect URI from request
+        # Build redirect URI - force HTTPS for Railway
         base_url = str(request.base_url).rstrip('/')
+        if base_url.startswith('http://'):
+            base_url = base_url.replace('http://', 'https://', 1)
         redirect_uri = f"{base_url}/oauth/callback"
         
         flow = Flow.from_client_config(
