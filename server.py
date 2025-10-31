@@ -47,7 +47,7 @@ def get_sheets_client():
 # ============================================================================
 
 CALENDAR_SCOPES = [
-    'https://www.googleapis.com/auth/calendar',
+    'https://www.googleapis.com/auth/calendar.readonly',
     'https://www.googleapis.com/auth/calendar.events'
 ]
 
