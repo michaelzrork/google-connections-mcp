@@ -991,24 +991,11 @@ async def start_oauth(request: Request):
         base_url = str(request.base_url).rstrip('/')
         redirect_uri = f"{base_url}/oauth/callback"
         
-        flow = Flow.from_client_config(
-            credentials_info,
-            scopes=CALENDAR_SCOPES,
-            redirect_uri=redirect_uri
-        )
-        
-        auth_url, state = flow.authorization_url(
-            access_type='offline',
-            prompt='consent',
-            include_granted_scopes='true'
-        )
-        
-        # Store state in a simple way (in production, use Redis or similar)
-        # For now, we'll just pass it through the redirect
-        return RedirectResponse(auth_url)
-        
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        # TEMPORARY LOGGING - remove after debugging
+        print(f"DEBUG: base_url = {base_url}")
+        print(f"DEBUG: redirect_uri = {redirect_uri}")
+        print(f"DEBUG: request.url = {request.url}")
+        print(f"DEBUG: request.base_url = {request.base_url}")
 
 @fastapi_app.get("/oauth/callback")
 async def oauth_callback(request: Request):
