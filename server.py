@@ -1057,7 +1057,7 @@ async def oauth_callback(request: Request):
 @fastapi_app.get("/health")
 async def health_check(request: Request):
     """Health check endpoint"""
-    return {"status": "ok", "service": "Daily Tracking MCP"}
+    return JSONResponse({"status": "ok", "service": "Daily Tracking MCP"})
 
 # ============================================================================
 # GOOGLE CALENDAR MCP TOOLS
