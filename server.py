@@ -924,11 +924,147 @@ async def append_rows(params: AppendRowsInput) -> str:
 
 
 # ============================================================================
-# GOOGLE CALENDAR INTEGRATION
+# GOOGLE CALENDAR OAUTH & WEB ENDPOINTS
 # ============================================================================
 
-@server.call_tool()
-async def list_calendars(page_token: str = None) -> list[types.TextContent]:
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse, JSONResponse
+from starlette.middleware.cors import CORSMiddleware
+
+# Create FastAPI app for OAuth callbacks
+fastapi_app = FastAPI()
+
+fastapi_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+def get_calendar_service():
+    """Get authenticated Google Calendar service"""
+    from google.auth.transport.requests import Request as GoogleRequest
+    
+    creds = None
+    
+    # Try to load token from environment variable
+    token_json = os.environ.get('CALENDAR_TOKEN_JSON')
+    if token_json:
+        try:
+            creds = Credentials.from_authorized_user_info(
+                json.loads(token_json),
+                CALENDAR_SCOPES
+            )
+        except Exception as e:
+            print(f"Error loading token: {e}")
+    
+    # If no valid credentials, need to authenticate
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            try:
+                creds.refresh(GoogleRequest())
+                # Save refreshed token back to env (you'll need to update Railway manually)
+                print("="*50)
+                print("TOKEN REFRESHED - UPDATE CALENDAR_TOKEN_JSON:")
+                print(creds.to_json())
+                print("="*50)
+            except Exception as e:
+                print(f"Error refreshing token: {e}")
+                raise Exception("Token expired and refresh failed. Visit /oauth/start to re-authorize")
+        else:
+            raise Exception("No valid credentials. Visit /oauth/start to authorize")
+    
+    return build('calendar', 'v3', credentials=creds)
+
+@fastapi_app.get("/oauth/start")
+async def start_oauth(request: Request):
+    """Start OAuth flow - visit this URL to authorize"""
+    try:
+        credentials_json = os.environ.get('CALENDAR_CREDENTIALS')
+        if not credentials_json:
+            return JSONResponse({"error": "CALENDAR_CREDENTIALS not set"}, status_code=500)
+        
+        credentials_info = json.loads(credentials_json)
+        
+        # Build redirect URI from request
+        base_url = str(request.base_url).rstrip('/')
+        redirect_uri = f"{base_url}/oauth/callback"
+        
+        flow = Flow.from_client_config(
+            credentials_info,
+            scopes=CALENDAR_SCOPES,
+            redirect_uri=redirect_uri
+        )
+        
+        auth_url, state = flow.authorization_url(
+            access_type='offline',
+            prompt='consent',
+            include_granted_scopes='true'
+        )
+        
+        # Store state in a simple way (in production, use Redis or similar)
+        # For now, we'll just pass it through the redirect
+        return RedirectResponse(auth_url)
+        
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@fastapi_app.get("/oauth/callback")
+async def oauth_callback(request: Request):
+    """Handle OAuth callback from Google"""
+    try:
+        code = request.query_params.get('code')
+        if not code:
+            return JSONResponse({"error": "No code provided"}, status_code=400)
+        
+        credentials_json = os.environ.get('CALENDAR_CREDENTIALS')
+        credentials_info = json.loads(credentials_json)
+        
+        # Build redirect URI from request
+        base_url = str(request.base_url).rstrip('/')
+        redirect_uri = f"{base_url}/oauth/callback"
+        
+        flow = Flow.from_client_config(
+            credentials_info,
+            scopes=CALENDAR_SCOPES,
+            redirect_uri=redirect_uri
+        )
+        
+        flow.fetch_token(code=code)
+        creds = flow.credentials
+        
+        # Print the token JSON so you can save it to Railway
+        token_json = creds.to_json()
+        print("\n" + "="*60)
+        print("✅ AUTHORIZATION SUCCESSFUL!")
+        print("="*60)
+        print("\nCopy this entire JSON and save it as Railway environment variable:")
+        print("Variable name: CALENDAR_TOKEN_JSON")
+        print("\nToken JSON:")
+        print(token_json)
+        print("\n" + "="*60)
+        
+        return JSONResponse({
+            "success": True,
+            "message": "Authorization successful! Check your Railway logs for the token.",
+            "instructions": "Copy the CALENDAR_TOKEN_JSON from logs and add it to Railway environment variables, then redeploy."
+        })
+        
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@fastapi_app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "ok", "service": "Daily Tracking MCP"}
+
+# ============================================================================
+# GOOGLE CALENDAR MCP TOOLS
+# ============================================================================
+
+@mcp.tool(name="list_calendars")
+async def list_calendars(page_token: str = None) -> str:
     """List all available calendars"""
     try:
         service = get_calendar_service()
@@ -938,22 +1074,15 @@ async def list_calendars(page_token: str = None) -> list[types.TextContent]:
         
         calendars = calendars_result.get('items', [])
         
-        return [types.TextContent(
-            type="text",
-            text=json.dumps({
-                "success": True,
-                "calendars": calendars,
-                "nextPageToken": calendars_result.get('nextPageToken')
-            }, indent=2)
-        )]
+        return json.dumps({
+            "success": True,
+            "calendars": calendars,
+            "nextPageToken": calendars_result.get('nextPageToken')
+        }, indent=2)
     except Exception as e:
-        return [types.TextContent(
-            type="text",
-            text=json.dumps({"success": False, "error": str(e)}, indent=2)
-        )]
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-
-@server.call_tool()
+@mcp.tool(name="list_calendar_events")
 async def list_calendar_events(
     calendar_id: str = "primary",
     time_min: str = None,
@@ -961,7 +1090,7 @@ async def list_calendar_events(
     max_results: int = 25,
     query: str = None,
     page_token: str = None
-) -> list[types.TextContent]:
+) -> str:
     """
     List events from a calendar
     
@@ -989,26 +1118,19 @@ async def list_calendar_events(
         
         events = events_result.get('items', [])
         
-        return [types.TextContent(
-            type="text",
-            text=json.dumps({
-                "success": True,
-                "events": events,
-                "nextPageToken": events_result.get('nextPageToken')
-            }, indent=2)
-        )]
+        return json.dumps({
+            "success": True,
+            "events": events,
+            "nextPageToken": events_result.get('nextPageToken')
+        }, indent=2)
     except Exception as e:
-        return [types.TextContent(
-            type="text",
-            text=json.dumps({"success": False, "error": str(e)}, indent=2)
-        )]
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-
-@server.call_tool()
+@mcp.tool(name="get_calendar_event")
 async def get_calendar_event(
     calendar_id: str,
     event_id: str
-) -> list[types.TextContent]:
+) -> str:
     """Get a specific calendar event"""
     try:
         service = get_calendar_service()
@@ -1017,21 +1139,14 @@ async def get_calendar_event(
             eventId=event_id
         ).execute()
         
-        return [types.TextContent(
-            type="text",
-            text=json.dumps({
-                "success": True,
-                "event": event
-            }, indent=2)
-        )]
+        return json.dumps({
+            "success": True,
+            "event": event
+        }, indent=2)
     except Exception as e:
-        return [types.TextContent(
-            type="text",
-            text=json.dumps({"success": False, "error": str(e)}, indent=2)
-        )]
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-
-@server.call_tool()
+@mcp.tool(name="create_calendar_event")
 async def create_calendar_event(
     calendar_id: str,
     summary: str,
@@ -1041,7 +1156,7 @@ async def create_calendar_event(
     location: str = None,
     attendees: list = None,
     reminders: dict = None
-) -> list[types.TextContent]:
+) -> str:
     """
     Create a calendar event
     
@@ -1084,22 +1199,15 @@ async def create_calendar_event(
             body=event_body
         ).execute()
         
-        return [types.TextContent(
-            type="text",
-            text=json.dumps({
-                "success": True,
-                "event": event,
-                "event_link": event.get('htmlLink')
-            }, indent=2)
-        )]
+        return json.dumps({
+            "success": True,
+            "event": event,
+            "event_link": event.get('htmlLink')
+        }, indent=2)
     except Exception as e:
-        return [types.TextContent(
-            type="text",
-            text=json.dumps({"success": False, "error": str(e)}, indent=2)
-        )]
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-
-@server.call_tool()
+@mcp.tool(name="update_calendar_event")
 async def update_calendar_event(
     calendar_id: str,
     event_id: str,
@@ -1108,7 +1216,7 @@ async def update_calendar_event(
     end_time: str = None,
     description: str = None,
     location: str = None
-) -> list[types.TextContent]:
+) -> str:
     """Update an existing calendar event"""
     try:
         service = get_calendar_service()
@@ -1143,25 +1251,18 @@ async def update_calendar_event(
             body=event
         ).execute()
         
-        return [types.TextContent(
-            type="text",
-            text=json.dumps({
-                "success": True,
-                "event": updated_event
-            }, indent=2)
-        )]
+        return json.dumps({
+            "success": True,
+            "event": updated_event
+        }, indent=2)
     except Exception as e:
-        return [types.TextContent(
-            type="text",
-            text=json.dumps({"success": False, "error": str(e)}, indent=2)
-        )]
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-
-@server.call_tool()
+@mcp.tool(name="delete_calendar_event")
 async def delete_calendar_event(
     calendar_id: str,
     event_id: str
-) -> list[types.TextContent]:
+) -> str:
     """Delete a calendar event"""
     try:
         service = get_calendar_service()
@@ -1171,18 +1272,12 @@ async def delete_calendar_event(
             eventId=event_id
         ).execute()
         
-        return [types.TextContent(
-            type="text",
-            text=json.dumps({
-                "success": True,
-                "message": f"Event {event_id} deleted successfully"
-            }, indent=2)
-        )]
+        return json.dumps({
+            "success": True,
+            "message": f"Event {event_id} deleted successfully"
+        }, indent=2)
     except Exception as e:
-        return [types.TextContent(
-            type="text",
-            text=json.dumps({"success": False, "error": str(e)}, indent=2)
-        )]
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 # ============================================================================
 # SERVER STARTUP
@@ -1209,12 +1304,17 @@ if __name__ == "__main__":
             )
         return Response()
     
+    # Mount both MCP SSE endpoints AND FastAPI OAuth endpoints
     app = Starlette(
         routes=[
-            Route("/", endpoint=handle_sse, methods=["GET"]),
+            Route("/sse", endpoint=handle_sse, methods=["GET"]),
             Mount("/messages", app=sse.handle_post_message),
+            Mount("/", app=fastapi_app),  # Mount FastAPI app for OAuth
         ]
     )
+    
+    print(f"Starting server on port {port}")
+    print(f"OAuth flow available at: http://localhost:{port}/oauth/start")
     
     uvicorn.run(app, host="0.0.0.0", port=port)
 
