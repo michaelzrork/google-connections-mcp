@@ -1304,17 +1304,21 @@ if __name__ == "__main__":
             )
         return Response()
     
-    # Mount both MCP SSE endpoints AND FastAPI OAuth endpoints
+    # Create combined app with explicit routes
     app = Starlette(
         routes=[
+            # MCP SSE endpoints
             Route("/sse", endpoint=handle_sse, methods=["GET"]),
             Mount("/messages", app=sse.handle_post_message),
-            Mount("/", app=fastapi_app),  # Mount FastAPI app for OAuth
+            # OAuth endpoints
+            Route("/oauth/start", endpoint=start_oauth, methods=["GET"]),
+            Route("/oauth/callback", endpoint=oauth_callback, methods=["GET"]),
+            Route("/health", endpoint=health_check, methods=["GET"]),
         ]
     )
     
     print(f"Starting server on port {port}")
-    print(f"OAuth flow available at: http://localhost:{port}/oauth/start")
+    print(f"OAuth available at: /oauth/start")
     
     uvicorn.run(app, host="0.0.0.0", port=port)
 
