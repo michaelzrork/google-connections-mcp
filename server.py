@@ -835,6 +835,54 @@ async def update_priority_status(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 # ============================================================================
+# JOB APPLICATION TRACKING
+# ============================================================================
+    
+@mcp.tool(name="log_job_application")
+async def log_job_application(
+    apply_date: str,
+    type_of_work: str,
+    employer_name: str,
+    employer_address: str,
+    person_contacted: str,
+    phone_number: str,
+    method_of_contact: str,
+    email_address: str,
+    results_of_contact: str,
+    notes: str
+) -> str:
+    """Log a job application to the unemployment tracking spreadsheet."""
+    try:
+        client = get_sheets_client()
+        spreadsheet = client.open_by_key("1o3Elpb4CS_CELD3W1Ban6tI_H1od6_8iNoEfiGmXpWY")
+        worksheet = spreadsheet.worksheet('Sheet1')  # Change if your worksheet has a different name
+        
+        # Append row - first 3 columns empty (Submitted checkbox and formula columns)
+        worksheet.append_row([
+            "",  # Submitted (checkbox)
+            "",  # Week Begin (formula)
+            "",  # Week End (formula)
+            apply_date,
+            type_of_work,
+            employer_name,
+            employer_address,
+            person_contacted,
+            phone_number,
+            method_of_contact,
+            email_address,
+            results_of_contact,
+            notes
+        ])
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Logged application to {employer_name}"
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+# ============================================================================
 # BASIC CRUD OPERATIONS (Keep these for writing)
 # ============================================================================
 
