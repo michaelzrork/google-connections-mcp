@@ -74,7 +74,7 @@ def get_service_scopes(service_name):
             'https://www.googleapis.com/auth/tasks'
         ],
         'keep': [
-            'https://www.googleapis.com/auth/keep'
+            'https://www.googleapis.com/auth/keep.readonly'
         ]
     }
     return scope_map.get(service_name, [])
