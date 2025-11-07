@@ -28,7 +28,7 @@ ALL_SCOPES = [
     'https://www.googleapis.com/auth/tasks',
     
     # Keep - Notes access
-    'https://www.googleapis.com/auth/keep',
+    'https://www.googleapis.com/auth/keep.readonly',
 ]
 
 # Scope descriptions for user consent screen
