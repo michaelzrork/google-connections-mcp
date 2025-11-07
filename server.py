@@ -39,6 +39,28 @@ class QuerySheetInput(BaseModel):
     sort_by: Optional[str] = Field(default=None)
     sort_desc: bool = Field(default=False)
 
+def parse_datetime(value):
+    """Parse a value as datetime, supporting multiple formats."""
+    if pd.isna(value) or value == '':
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        # Try multiple common formats
+        formats = [
+            '%m/%d/%Y',           # 11/4/2025
+            '%Y-%m-%d',           # 2025-11-04
+            '%m/%d/%Y %I:%M %p',  # 11/4/2025 2:30 PM
+            '%Y-%m-%d %H:%M:%S',  # 2025-11-04 14:30:00
+            '%m/%d/%Y %H:%M:%S',  # 11/4/2025 14:30:00
+        ]
+        for fmt in formats:
+            try:
+                return datetime.strptime(value, fmt)
+            except ValueError:
+                continue
+    return None
+
 @mcp.tool(name="query_sheet")
 async def query_sheet(params: QuerySheetInput) -> str:
     """
@@ -50,6 +72,8 @@ async def query_sheet(params: QuerySheetInput) -> str:
     - {'field': 'Category', 'operator': 'in', 'value': ['Work', 'Job Search']}
     
     Operators: ==, !=, >, <, >=, <=, in, not in, contains, not contains, is_null, not_null
+    
+    Date/time operators (>, <, >=, <=, ==, !=) automatically parse datetime values.
     """
     try:
         sheets_client = auth.get_sheets_client()
@@ -65,6 +89,30 @@ async def query_sheet(params: QuerySheetInput) -> str:
             if field not in df.columns:
                 continue
             
+            # For date/time comparison operators, try to parse as datetime
+            if operator in ['>', '<', '>=', '<=', '==', '!=']:
+                filter_dt = parse_datetime(value)
+                if filter_dt is not None:
+                    # Parse column values as datetime
+                    df_dts = df[field].apply(parse_datetime)
+                    # Only apply filter to rows where datetime parsing succeeded
+                    valid_mask = df_dts.notna()
+                    
+                    if operator == '==':
+                        df = df[valid_mask & (df_dts == filter_dt)]
+                    elif operator == '!=':
+                        df = df[valid_mask & (df_dts != filter_dt)]
+                    elif operator == '>':
+                        df = df[valid_mask & (df_dts > filter_dt)]
+                    elif operator == '<':
+                        df = df[valid_mask & (df_dts < filter_dt)]
+                    elif operator == '>=':
+                        df = df[valid_mask & (df_dts >= filter_dt)]
+                    elif operator == '<=':
+                        df = df[valid_mask & (df_dts <= filter_dt)]
+                    continue
+            
+            # Fall back to original string/value comparison
             if operator == '==':
                 df = df[df[field] == value]
             elif operator == '!=':
