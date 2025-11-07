@@ -93,23 +93,25 @@ async def query_sheet(params: QuerySheetInput) -> str:
             if operator in ['>', '<', '>=', '<=', '==', '!=']:
                 filter_dt = parse_datetime(value)
                 if filter_dt is not None:
-                    # Parse column values as datetime
-                    df_dts = df[field].apply(parse_datetime)
+                    # Parse column values as datetime - use reset index to avoid alignment issues
+                    df_dts = pd.Series([parse_datetime(val) for val in df[field]], index=df.index)
                     # Only apply filter to rows where datetime parsing succeeded
                     valid_mask = df_dts.notna()
                     
                     if operator == '==':
-                        df = df[valid_mask & (df_dts == filter_dt)]
+                        mask = valid_mask & (df_dts == filter_dt)
                     elif operator == '!=':
-                        df = df[valid_mask & (df_dts != filter_dt)]
+                        mask = valid_mask & (df_dts != filter_dt)
                     elif operator == '>':
-                        df = df[valid_mask & (df_dts > filter_dt)]
+                        mask = valid_mask & (df_dts > filter_dt)
                     elif operator == '<':
-                        df = df[valid_mask & (df_dts < filter_dt)]
+                        mask = valid_mask & (df_dts < filter_dt)
                     elif operator == '>=':
-                        df = df[valid_mask & (df_dts >= filter_dt)]
+                        mask = valid_mask & (df_dts >= filter_dt)
                     elif operator == '<=':
-                        df = df[valid_mask & (df_dts <= filter_dt)]
+                        mask = valid_mask & (df_dts <= filter_dt)
+                    
+                    df = df[mask]
                     continue
             
             # Fall back to original string/value comparison
