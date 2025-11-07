@@ -6,8 +6,8 @@ Centralized scope management for all Google services
 # All scopes we need for full access
 ALL_SCOPES = [
     # Calendar - Read/Write
-    'https://www.googleapis.com/auth/calendar.events'
-    'https://www.googleapis.com/auth/calendar.readonly',,
+    'https://www.googleapis.com/auth/calendar.events',
+    'https://www.googleapis.com/auth/calendar.readonly',
     
     # Gmail - Read/Write/Send
     'https://www.googleapis.com/auth/gmail.modify',
