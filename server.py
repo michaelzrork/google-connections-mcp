@@ -802,9 +802,103 @@ async def spam_gmail(message_ids: List[str]) -> str:
 # GOOGLE TASKS TOOLS
 # ============================================================================
 
-# ============================================================================
-# GOOGLE TASKS TOOLS
-# ============================================================================
+@mcp.tool(name="create_task_list")
+async def create_task_list(title: str) -> str:
+    """Create a new Google Tasks task list"""
+    try:
+        service = auth.get_tasks_service()
+
+        body = {"title": title}
+        task_list = service.tasklists().insert(body=body).execute()
+
+        return json.dumps({
+            "success": True,
+            "task_list": task_list
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+@mcp.tool(name="delete_task_list")
+async def delete_task_list(task_list_id: str) -> str:
+    """Delete a Google Tasks task list"""
+    try:
+        service = auth.get_tasks_service()
+
+        service.tasklists().delete(tasklist=task_list_id).execute()
+
+        return json.dumps({
+            "success": True,
+            "message": f"Deleted task list {task_list_id}"
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+@mcp.tool(name="update_task_list")
+async def update_task_list(task_list_id: str, title: str) -> str:
+    """Rename a Google Tasks task list"""
+    try:
+        service = auth.get_tasks_service()
+
+        task_list = service.tasklists().get(tasklist=task_list_id).execute()
+        task_list["title"] = title
+
+        updated = service.tasklists().update(
+            tasklist=task_list_id,
+            body=task_list
+        ).execute()
+
+        return json.dumps({
+            "success": True,
+            "task_list": updated
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+@mcp.tool(name="move_task_to_list")
+async def move_task_to_list(
+    task_id: str,
+    source_list_id: str,
+    destination_list_id: str
+) -> str:
+    """Move a task between lists (copy → delete)"""
+    try:
+        service = auth.get_tasks_service()
+
+        # Get the original task
+        task = service.tasks().get(
+            tasklist=source_list_id,
+            task=task_id
+        ).execute()
+
+        # Remove fields that cannot be manually set on creation
+        task_copy = {
+            "title": task.get("title"),
+            "notes": task.get("notes"),
+            "due": task.get("due"),
+            "status": task.get("status")
+        }
+
+        # Create in destination
+        new_task = service.tasks().insert(
+            tasklist=destination_list_id,
+            body=task_copy
+        ).execute()
+
+        # Delete original
+        service.tasks().delete(
+            tasklist=source_list_id,
+            task=task_id
+        ).execute()
+
+        return json.dumps({
+            "success": True,
+            "moved_task": new_task,
+            "message": f"Task {task_id} moved to list {destination_list_id}"
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
 
 @mcp.tool(name="list_task_lists")
 async def list_task_lists() -> str:
