@@ -10,6 +10,10 @@ import json
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
+from datetime import datetime
+import pytz
+from mcp import tool
+
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field, ConfigDict
 import pandas as pd
@@ -22,6 +26,17 @@ mcp = FastMCP("Daily Tracking")
 
 # Get auth manager
 auth = get_auth_manager()
+
+# ============================================================================
+# GET TIME TOOL
+# ============================================================================
+
+@tool(name="get_time", description="Returns the current time in ISO format for America/New_York")
+async def get_time():
+    tz = pytz.timezone("America/New_York")
+    now = datetime.now(tz)
+    return {"currentTime": now.isoformat()}
+
 
 # ============================================================================
 # GOOGLE SHEETS - GENERIC OPERATIONS
