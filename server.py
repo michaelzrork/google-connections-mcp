@@ -7,12 +7,9 @@ No sheet-specific helpers - just generic CRUD
 
 import os
 import json
-from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
-
 from datetime import datetime
-import pytz
-from mcp import tool
+from zoneinfo import ZoneInfo
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field, ConfigDict
@@ -31,12 +28,13 @@ auth = get_auth_manager()
 # GET TIME TOOL
 # ============================================================================
 
-@tool(name="get_time", description="Returns the current time in ISO format for America/New_York")
-async def get_time():
-    tz = pytz.timezone("America/New_York")
-    now = datetime.now(tz)
+@mcp.tool(
+    name="get_time",
+    description="Returns the current time in ISO format for America/New_York"
+)
+async def get_time() -> dict:
+    now = datetime.now(ZoneInfo("America/New_York"))
     return {"currentTime": now.isoformat()}
-
 
 # ============================================================================
 # GOOGLE SHEETS - GENERIC OPERATIONS
