@@ -915,6 +915,56 @@ async def list_task_lists() -> str:
         }, indent=2)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
+    
+@mcp.tool(name="star_task")
+async def star_task(task_list_id: str, task_id: str) -> str:
+    """Star a Google Task (set starred=True)."""
+    try:
+        service = auth.get_tasks_service()
+
+        body = {"starred": True}
+
+        updated_task = service.tasks().patch(
+            tasklist=task_list_id,
+            task=task_id,
+            body=body
+        ).execute()
+
+        return json.dumps({
+            "success": True,
+            "task": updated_task
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        }, indent=2)
+
+@mcp.tool(name="unstar_task")
+async def unstar_task(task_list_id: str, task_id: str) -> str:
+    """Unstar a Google Task (set starred=False)."""
+    try:
+        service = auth.get_tasks_service()
+
+        body = {"starred": False}
+
+        updated_task = service.tasks().patch(
+            tasklist=task_list_id,
+            task=task_id,
+            body=body
+        ).execute()
+
+        return json.dumps({
+            "success": True,
+            "task": updated_task
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "error": str(e)
+        }, indent=2)
 
 
 @mcp.tool(name="list_tasks")
