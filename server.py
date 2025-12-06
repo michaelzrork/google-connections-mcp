@@ -30,11 +30,16 @@ auth = get_auth_manager()
 
 @mcp.tool(
     name="get_time",
-    description="Returns the current time in ISO format for America/New_York"
+    description="Returns the current date, time, and day of week for America/New_York"
 )
 async def get_time() -> dict:
     now = datetime.now(ZoneInfo("America/New_York"))
-    return {"currentTime": now.isoformat()}
+    return {
+        "dayOfWeek": now.strftime("%A"),
+        "date": now.strftime("%Y-%m-%d"),
+        "time": now.strftime("%I:%M:%S %p"),
+        "isoFormat": now.isoformat()
+    }
 
 # ============================================================================
 # GOOGLE SHEETS - GENERIC OPERATIONS
