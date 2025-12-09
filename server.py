@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Daily Tracking MCP Server - Refactored
+Google Connections MCP Server - Refactored
 Generic Google services access with OAuth
 No sheet-specific helpers - just generic CRUD
 """
