@@ -19,7 +19,7 @@ from auth_manager import get_auth_manager, create_oauth_flow
 from sheet_mapper import get_sheet_mapper, SheetMapper
 
 # Initialize MCP server
-mcp = FastMCP("Daily Tracking")
+mcp = FastMCP("Google Connections MCP")
 
 # Get auth manager
 auth = get_auth_manager()
@@ -1191,200 +1191,6 @@ async def clear_completed_tasks(task_list_id: str = "@default") -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 # ============================================================================
-# GOOGLE KEEP TOOLS
-# ============================================================================
-
-# @mcp.tool(name="list_keep_notes")
-# async def list_keep_notes(
-#     page_size: int = 50,
-#     page_token: str = None,
-#     filter_query: str = None
-# ) -> str:
-#     """
-#     List Google Keep notes.
-    
-#     Args:
-#         page_size: Number of notes to return (max 100)
-#         page_token: Token for pagination
-#         filter_query: Optional filter (e.g., "trashed=true", "title:groceries")
-#     """
-#     try:
-#         service = auth.get_keep_service()
-        
-#         params = {
-#             'pageSize': min(page_size, 100)
-#         }
-#         if page_token:
-#             params['pageToken'] = page_token
-#         if filter_query:
-#             params['filter'] = filter_query
-        
-#         results = service.notes().list(**params).execute()
-        
-#         return json.dumps({
-#             "success": True,
-#             "notes": results.get('notes', []),
-#             "nextPageToken": results.get('nextPageToken')
-#         }, indent=2)
-#     except Exception as e:
-#         return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-
-# @mcp.tool(name="get_keep_note")
-# async def get_keep_note(note_id: str) -> str:
-#     """Get a specific Google Keep note by ID"""
-#     try:
-#         service = auth.get_keep_service()
-        
-#         note = service.notes().get(name=f"notes/{note_id}").execute()
-        
-#         return json.dumps({
-#             "success": True,
-#             "note": note
-#         }, indent=2)
-#     except Exception as e:
-#         return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-
-# @mcp.tool(name="create_keep_note")
-# async def create_keep_note(
-#     title: str = "",
-#     body: str = "",
-# ) -> str:
-#     """
-#     Create a new Google Keep note.
-    
-#     Args:
-#         title: Note title
-#         body: Note body text
-#     """
-#     try:
-#         service = auth.get_keep_service()
-        
-#         note_body = {}
-        
-#         if title:
-#             note_body['title'] = title
-        
-#         if body:
-#             note_body['body'] = {'text': {'text': body}}
-        
-#         note = service.notes().create(body=note_body).execute()
-        
-#         return json.dumps({
-#             "success": True,
-#             "note": note
-#         }, indent=2)
-#     except Exception as e:
-#         return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-
-# @mcp.tool(name="create_keep_list")
-# async def create_keep_list(
-#     title: str,
-#     items: List[Dict[str, Any]]
-# ) -> str:
-#     """
-#     Create a Google Keep list note.
-    
-#     Args:
-#         title: List title
-#         items: List of items, each with 'text' and optionally 'checked' (bool)
-        
-#     Example items:
-#     [
-#         {"text": "Milk", "checked": False},
-#         {"text": "Eggs", "checked": True},
-#         {"text": "Bread", "checked": False}
-#     ]
-#     """
-#     try:
-#         service = auth.get_keep_service()
-        
-#         list_items = []
-#         for item in items:
-#             list_item = {
-#                 'text': {'text': item['text']},
-#                 'checked': item.get('checked', False)
-#             }
-#             list_items.append(list_item)
-        
-#         note_body = {
-#             'title': title,
-#             'body': {
-#                 'list': {
-#                     'listItems': list_items
-#                 }
-#             }
-#         }
-        
-#         note = service.notes().create(body=note_body).execute()
-        
-#         return json.dumps({
-#             "success": True,
-#             "note": note
-#         }, indent=2)
-#     except Exception as e:
-#         return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-
-# @mcp.tool(name="update_keep_list_item")
-# async def update_keep_list_item(
-#     note_id: str,
-#     item_id: str,
-#     checked: bool
-# ) -> str:
-#     """
-#     Check or uncheck an item in a Keep list.
-    
-#     Args:
-#         note_id: ID of the note containing the list
-#         item_id: ID of the list item to update
-#         checked: True to check, False to uncheck
-#     """
-#     try:
-#         service = auth.get_keep_service()
-        
-#         # Get current note
-#         note = service.notes().get(name=f"notes/{note_id}").execute()
-        
-#         # Find and update the item
-#         if 'body' in note and 'list' in note['body']:
-#             for item in note['body']['list'].get('listItems', []):
-#                 if item.get('id') == item_id:
-#                     item['checked'] = checked
-#                     break
-        
-#         # Update the note
-#         updated_note = service.notes().patch(
-#             name=f"notes/{note_id}",
-#             body=note
-#         ).execute()
-        
-#         return json.dumps({
-#             "success": True,
-#             "note": updated_note
-#         }, indent=2)
-#     except Exception as e:
-#         return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-
-# @mcp.tool(name="delete_keep_note")
-# async def delete_keep_note(note_id: str) -> str:
-#     """Delete a Google Keep note (moves to trash)"""
-#     try:
-#         service = auth.get_keep_service()
-        
-#         service.notes().delete(name=f"notes/{note_id}").execute()
-        
-#         return json.dumps({
-#             "success": True,
-#             "message": f"Note {note_id} deleted"
-#         }, indent=2)
-#     except Exception as e:
-#         return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-# ============================================================================
 # GOOGLE DRIVE TOOLS (NEW - Basic)
 # ============================================================================
 
@@ -1517,7 +1323,7 @@ async def health_check():
     """Health check endpoint"""
     return JSONResponse({
         "status": "ok",
-        "service": "Daily Tracking MCP",
+        "service": "Google Connections MCP",
         "authenticated": auth.is_authenticated()
     })
 

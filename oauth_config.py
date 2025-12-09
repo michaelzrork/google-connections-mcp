@@ -25,10 +25,7 @@ ALL_SCOPES = [
     'https://www.googleapis.com/auth/documents',
     
     # Tasks - Read/Write
-    'https://www.googleapis.com/auth/tasks',
-    
-    # Keep - Notes access
-    # 'https://www.googleapis.com/auth/keep.readonly',
+    'https://www.googleapis.com/auth/tasks'
 ]
 
 # Scope descriptions for user consent screen
@@ -38,8 +35,7 @@ SCOPE_DESCRIPTIONS = {
     'drive': 'Access and manage your Google Drive files',
     'sheets': 'Read and write to Google Sheets',
     'docs': 'Access and edit Google Docs',
-    'tasks': 'Access and manage Google Tasks',
-    # 'keep': 'Access and manage Google Keep notes',
+    'tasks': 'Access and manage Google Tasks'
 }
 
 def get_required_scopes():
@@ -72,9 +68,6 @@ def get_service_scopes(service_name):
         ],
         'tasks': [
             'https://www.googleapis.com/auth/tasks'
-        ],
-        # 'keep': [
-        #     'https://www.googleapis.com/auth/keep.readonly'
-        # ]
+        ]
     }
     return scope_map.get(service_name, [])
