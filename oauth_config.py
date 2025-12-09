@@ -1,5 +1,5 @@
 """
-OAuth Configuration for Daily Tracking MCP Server
+OAuth Configuration for Google Connections MCP Server
 Centralized scope management for all Google services
 """
 
