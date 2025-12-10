@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Google Connections MCP Server - Refactored
-Generic Google services access with OAuth
-No sheet-specific helpers - just generic CRUD
+Google Connections MCP Server
+Generic Google Workspace API access with OAuth
+Supports Sheets, Calendar, Gmail, Drive, and Tasks
 """
 
 import os
@@ -15,8 +15,8 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field, ConfigDict
 import pandas as pd
 
-from auth_manager import get_auth_manager, create_oauth_flow
-from sheet_mapper import get_sheet_mapper, SheetMapper
+from google_connections_mcp.auth_manager import get_auth_manager, create_oauth_flow
+from google_connections_mcp.sheet_mapper import get_sheet_mapper, SheetMapper
 
 # Initialize MCP server
 mcp = FastMCP("Google Connections MCP")
@@ -27,9 +27,6 @@ auth = get_auth_manager()
 # ============================================================================
 # GET TIME TOOL
 # ============================================================================
-
-# Gets current date/time using a timezone parameter in the call
-# User will want to tell their AI tool their timezone in their user preferences before using the tool
 
 @mcp.tool(
     name="get_time",
@@ -68,13 +65,12 @@ def parse_datetime(value):
     if isinstance(value, datetime):
         return value
     if isinstance(value, str):
-        # Try multiple common formats
         formats = [
-            '%m/%d/%Y',           # 11/4/2025
-            '%Y-%m-%d',           # 2025-11-04
-            '%m/%d/%Y %I:%M %p',  # 11/4/2025 2:30 PM
-            '%Y-%m-%d %H:%M:%S',  # 2025-11-04 14:30:00
-            '%m/%d/%Y %H:%M:%S',  # 11/4/2025 14:30:00
+            '%m/%d/%Y',
+            '%Y-%m-%d',
+            '%m/%d/%Y %I:%M %p',
+            '%Y-%m-%d %H:%M:%S',
+            '%m/%d/%Y %H:%M:%S',
         ]
         for fmt in formats:
             try:
@@ -102,7 +98,6 @@ async def query_sheet(params: QuerySheetInput) -> str:
         mapper = get_sheet_mapper(sheets_client, params.spreadsheet_id, params.worksheet_name)
         df = mapper.to_dataframe()
         
-        # Apply filters
         for filter_def in params.filters:
             field = filter_def['field']
             operator = filter_def['operator']
@@ -111,13 +106,10 @@ async def query_sheet(params: QuerySheetInput) -> str:
             if field not in df.columns:
                 continue
             
-            # For date/time comparison operators, try to parse as datetime
             if operator in ['>', '<', '>=', '<=', '==', '!=']:
                 filter_dt = parse_datetime(value)
                 if filter_dt is not None:
-                    # Parse column values as datetime - use reset index to avoid alignment issues
                     df_dts = pd.Series([parse_datetime(val) for val in df[field]], index=df.index)
-                    # Only apply filter to rows where datetime parsing succeeded
                     valid_mask = df_dts.notna()
                     
                     if operator == '==':
@@ -136,7 +128,6 @@ async def query_sheet(params: QuerySheetInput) -> str:
                     df = df[mask]
                     continue
             
-            # Fall back to original string/value comparison
             if operator == '==':
                 df = df[df[field] == value]
             elif operator == '!=':
@@ -162,17 +153,14 @@ async def query_sheet(params: QuerySheetInput) -> str:
             elif operator == 'not_null':
                 df = df[df[field].notna() & (df[field] != '')]
         
-        # Select columns
         if params.return_columns:
             available_cols = [col for col in params.return_columns if col in df.columns]
             if available_cols:
                 df = df[available_cols]
         
-        # Sort
         if params.sort_by and params.sort_by in df.columns:
             df = df.sort_values(by=params.sort_by, ascending=not params.sort_desc)
         
-        # Limit
         if params.limit:
             df = df.head(params.limit)
         
@@ -482,7 +470,7 @@ async def delete_calendar_event(calendar_id: str, event_id: str) -> str:
 
 
 # ============================================================================
-# GMAIL TOOLS (NEW)
+# GMAIL TOOLS
 # ============================================================================
 
 @mcp.tool(name="list_gmail_messages")
@@ -512,7 +500,6 @@ async def list_gmail_messages(
         
         messages = result.get('messages', [])
         
-        # Get basic details for each message
         detailed_messages = []
         for msg in messages[:max_results]:
             msg_detail = service.users().messages().get(
@@ -611,20 +598,7 @@ async def modify_gmail_message(
     """
     Modify labels on a Gmail message.
     
-    Common labels:
-    - 'INBOX' - In inbox
-    - 'UNREAD' - Unread
-    - 'STARRED' - Starred
-    - 'IMPORTANT' - Important
-    - 'SPAM' - Spam
-    - 'TRASH' - Trash
-    - 'CATEGORY_PERSONAL' - Primary category
-    - 'CATEGORY_SOCIAL' - Social category
-    - 'CATEGORY_PROMOTIONS' - Promotions category
-    - 'CATEGORY_UPDATES' - Updates category
-    - 'CATEGORY_FORUMS' - Forums category
-    
-    Custom labels use their label ID (use list_gmail_labels to get IDs)
+    Common labels: INBOX, UNREAD, STARRED, IMPORTANT, SPAM, TRASH
     """
     try:
         service = auth.get_gmail_service()
@@ -656,10 +630,7 @@ async def batch_modify_gmail(
     add_labels: List[str] = None,
     remove_labels: List[str] = None
 ) -> str:
-    """
-    Modify labels on multiple Gmail messages at once.
-    Useful for bulk operations like marking many messages as read or archiving.
-    """
+    """Modify labels on multiple Gmail messages at once."""
     try:
         service = auth.get_gmail_service()
         
@@ -669,7 +640,7 @@ async def batch_modify_gmail(
         if remove_labels:
             body['removeLabelIds'] = remove_labels
         
-        result = service.users().messages().batchModify(
+        service.users().messages().batchModify(
             userId='me',
             body=body
         ).execute()
@@ -685,7 +656,7 @@ async def batch_modify_gmail(
 
 @mcp.tool(name="list_gmail_labels")
 async def list_gmail_labels() -> str:
-    """List all Gmail labels (both system and custom)"""
+    """List all Gmail labels"""
     try:
         service = auth.get_gmail_service()
         
@@ -706,12 +677,7 @@ async def create_gmail_label(
     label_list_visibility: str = "labelShow",
     message_list_visibility: str = "show"
 ) -> str:
-    """
-    Create a new Gmail label.
-    
-    label_list_visibility: 'labelShow' or 'labelHide'
-    message_list_visibility: 'show' or 'hide'
-    """
+    """Create a new Gmail label."""
     try:
         service = auth.get_gmail_service()
         
@@ -734,180 +700,58 @@ async def create_gmail_label(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-# Helper functions for common operations
+# Gmail helper functions
 @mcp.tool(name="mark_gmail_read")
 async def mark_gmail_read(message_ids: List[str]) -> str:
     """Mark one or more Gmail messages as read"""
-    return await batch_modify_gmail(
-        message_ids=message_ids,
-        remove_labels=['UNREAD']
-    )
+    return await batch_modify_gmail(message_ids=message_ids, remove_labels=['UNREAD'])
 
 
 @mcp.tool(name="mark_gmail_unread")
 async def mark_gmail_unread(message_ids: List[str]) -> str:
     """Mark one or more Gmail messages as unread"""
-    return await batch_modify_gmail(
-        message_ids=message_ids,
-        add_labels=['UNREAD']
-    )
+    return await batch_modify_gmail(message_ids=message_ids, add_labels=['UNREAD'])
 
 
 @mcp.tool(name="star_gmail")
 async def star_gmail(message_ids: List[str]) -> str:
     """Star one or more Gmail messages"""
-    return await batch_modify_gmail(
-        message_ids=message_ids,
-        add_labels=['STARRED']
-    )
+    return await batch_modify_gmail(message_ids=message_ids, add_labels=['STARRED'])
 
 
 @mcp.tool(name="unstar_gmail")
 async def unstar_gmail(message_ids: List[str]) -> str:
     """Remove star from one or more Gmail messages"""
-    return await batch_modify_gmail(
-        message_ids=message_ids,
-        remove_labels=['STARRED']
-    )
+    return await batch_modify_gmail(message_ids=message_ids, remove_labels=['STARRED'])
 
 
 @mcp.tool(name="archive_gmail")
 async def archive_gmail(message_ids: List[str]) -> str:
-    """Archive one or more Gmail messages (remove from inbox)"""
-    return await batch_modify_gmail(
-        message_ids=message_ids,
-        remove_labels=['INBOX']
-    )
+    """Archive one or more Gmail messages"""
+    return await batch_modify_gmail(message_ids=message_ids, remove_labels=['INBOX'])
 
 
 @mcp.tool(name="move_to_inbox")
 async def move_to_inbox(message_ids: List[str]) -> str:
     """Move one or more Gmail messages to inbox"""
-    return await batch_modify_gmail(
-        message_ids=message_ids,
-        add_labels=['INBOX']
-    )
+    return await batch_modify_gmail(message_ids=message_ids, add_labels=['INBOX'])
 
 
 @mcp.tool(name="trash_gmail")
 async def trash_gmail(message_ids: List[str]) -> str:
     """Move one or more Gmail messages to trash"""
-    return await batch_modify_gmail(
-        message_ids=message_ids,
-        add_labels=['TRASH']
-    )
+    return await batch_modify_gmail(message_ids=message_ids, add_labels=['TRASH'])
 
 
 @mcp.tool(name="spam_gmail")
 async def spam_gmail(message_ids: List[str]) -> str:
     """Mark one or more Gmail messages as spam"""
-    return await batch_modify_gmail(
-        message_ids=message_ids,
-        add_labels=['SPAM'],
-        remove_labels=['INBOX']
-    )
+    return await batch_modify_gmail(message_ids=message_ids, add_labels=['SPAM'], remove_labels=['INBOX'])
+
 
 # ============================================================================
 # GOOGLE TASKS TOOLS
 # ============================================================================
-
-@mcp.tool(name="create_task_list")
-async def create_task_list(title: str) -> str:
-    """Create a new Google Tasks task list"""
-    try:
-        service = auth.get_tasks_service()
-
-        body = {"title": title}
-        task_list = service.tasklists().insert(body=body).execute()
-
-        return json.dumps({
-            "success": True,
-            "task_list": task_list
-        }, indent=2)
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-@mcp.tool(name="delete_task_list")
-async def delete_task_list(task_list_id: str) -> str:
-    """Delete a Google Tasks task list"""
-    try:
-        service = auth.get_tasks_service()
-
-        service.tasklists().delete(tasklist=task_list_id).execute()
-
-        return json.dumps({
-            "success": True,
-            "message": f"Deleted task list {task_list_id}"
-        }, indent=2)
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-@mcp.tool(name="update_task_list")
-async def update_task_list(task_list_id: str, title: str) -> str:
-    """Rename a Google Tasks task list"""
-    try:
-        service = auth.get_tasks_service()
-
-        task_list = service.tasklists().get(tasklist=task_list_id).execute()
-        task_list["title"] = title
-
-        updated = service.tasklists().update(
-            tasklist=task_list_id,
-            body=task_list
-        ).execute()
-
-        return json.dumps({
-            "success": True,
-            "task_list": updated
-        }, indent=2)
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-@mcp.tool(name="move_task_to_list")
-async def move_task_to_list(
-    task_id: str,
-    source_list_id: str,
-    destination_list_id: str
-) -> str:
-    """Move a task between lists (copy → delete)"""
-    try:
-        service = auth.get_tasks_service()
-
-        # Get the original task
-        task = service.tasks().get(
-            tasklist=source_list_id,
-            task=task_id
-        ).execute()
-
-        # Remove fields that cannot be manually set on creation
-        task_copy = {
-            "title": task.get("title"),
-            "notes": task.get("notes"),
-            "due": task.get("due"),
-            "status": task.get("status")
-        }
-
-        # Create in destination
-        new_task = service.tasks().insert(
-            tasklist=destination_list_id,
-            body=task_copy
-        ).execute()
-
-        # Delete original
-        service.tasks().delete(
-            tasklist=source_list_id,
-            task=task_id
-        ).execute()
-
-        return json.dumps({
-            "success": True,
-            "moved_task": new_task,
-            "message": f"Task {task_id} moved to list {destination_list_id}"
-        }, indent=2)
-
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
 
 @mcp.tool(name="list_task_lists")
 async def list_task_lists() -> str:
@@ -924,56 +768,53 @@ async def list_task_lists() -> str:
         }, indent=2)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
-    
-@mcp.tool(name="star_task")
-async def star_task(task_list_id: str, task_id: str) -> str:
-    """Star a Google Task (set starred=True)."""
+
+
+@mcp.tool(name="create_task_list")
+async def create_task_list(title: str) -> str:
+    """Create a new Google Tasks task list"""
     try:
         service = auth.get_tasks_service()
-
-        body = {"starred": True}
-
-        updated_task = service.tasks().patch(
-            tasklist=task_list_id,
-            task=task_id,
-            body=body
-        ).execute()
-
+        task_list = service.tasklists().insert(body={"title": title}).execute()
+        
         return json.dumps({
             "success": True,
-            "task": updated_task
+            "task_list": task_list
         }, indent=2)
-
     except Exception as e:
-        return json.dumps({
-            "success": False,
-            "error": str(e)
-        }, indent=2)
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool(name="unstar_task")
-async def unstar_task(task_list_id: str, task_id: str) -> str:
-    """Unstar a Google Task (set starred=False)."""
+
+@mcp.tool(name="delete_task_list")
+async def delete_task_list(task_list_id: str) -> str:
+    """Delete a Google Tasks task list"""
     try:
         service = auth.get_tasks_service()
-
-        body = {"starred": False}
-
-        updated_task = service.tasks().patch(
-            tasklist=task_list_id,
-            task=task_id,
-            body=body
-        ).execute()
-
+        service.tasklists().delete(tasklist=task_list_id).execute()
+        
         return json.dumps({
             "success": True,
-            "task": updated_task
+            "message": f"Deleted task list {task_list_id}"
         }, indent=2)
-
     except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="update_task_list")
+async def update_task_list(task_list_id: str, title: str) -> str:
+    """Rename a Google Tasks task list"""
+    try:
+        service = auth.get_tasks_service()
+        task_list = service.tasklists().get(tasklist=task_list_id).execute()
+        task_list["title"] = title
+        updated = service.tasklists().update(tasklist=task_list_id, body=task_list).execute()
+        
         return json.dumps({
-            "success": False,
-            "error": str(e)
+            "success": True,
+            "task_list": updated
         }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
 @mcp.tool(name="list_tasks")
@@ -985,17 +826,7 @@ async def list_tasks(
     due_max: str = None,
     max_results: int = 100
 ) -> str:
-    """
-    List tasks from a Google Tasks list.
-    
-    Args:
-        task_list_id: ID of task list (use '@default' for default list)
-        show_completed: Include completed tasks
-        show_hidden: Include hidden (deleted) tasks
-        due_min: Lower bound for task's due date (RFC 3339 timestamp)
-        due_max: Upper bound for task's due date (RFC 3339 timestamp)
-        max_results: Maximum number of tasks to return
-    """
+    """List tasks from a Google Tasks list."""
     try:
         service = auth.get_tasks_service()
         
@@ -1024,16 +855,9 @@ async def get_task(task_list_id: str, task_id: str) -> str:
     """Get a specific Google Task"""
     try:
         service = auth.get_tasks_service()
+        task = service.tasks().get(tasklist=task_list_id, task=task_id).execute()
         
-        task = service.tasks().get(
-            tasklist=task_list_id,
-            task=task_id
-        ).execute()
-        
-        return json.dumps({
-            "success": True,
-            "task": task
-        }, indent=2)
+        return json.dumps({"success": True, "task": task}, indent=2)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
@@ -1046,16 +870,7 @@ async def create_task(
     due: str = None,
     parent: str = None
 ) -> str:
-    """
-    Create a new Google Task.
-    
-    Args:
-        title: Task title
-        task_list_id: ID of task list (use '@default' for default list)
-        notes: Task notes/description
-        due: Due date (RFC 3339 timestamp, e.g., '2025-11-07T00:00:00Z')
-        parent: Parent task ID (for subtasks)
-    """
+    """Create a new Google Task."""
     try:
         service = auth.get_tasks_service()
         
@@ -1067,10 +882,7 @@ async def create_task(
         if parent:
             task_body['parent'] = parent
         
-        task = service.tasks().insert(
-            tasklist=task_list_id,
-            body=task_body
-        ).execute()
+        task = service.tasks().insert(tasklist=task_list_id, body=task_body).execute()
         
         return json.dumps({
             "success": True,
@@ -1089,30 +901,14 @@ async def update_task(
     due: str = None,
     status: str = None
 ) -> str:
-    """
-    Update a Google Task.
-    
-    Args:
-        task_list_id: ID of task list
-        task_id: ID of task to update
-        title: New title
-        notes: New notes
-        due: New due date (RFC 3339 timestamp)
-        status: 'needsAction' or 'completed'
-    """
+    """Update a Google Task."""
     try:
         service = auth.get_tasks_service()
+        task = service.tasks().get(tasklist=task_list_id, task=task_id).execute()
         
-        # Get current task
-        task = service.tasks().get(
-            tasklist=task_list_id,
-            task=task_id
-        ).execute()
-        
-        # Update fields
         if title:
             task['title'] = title
-        if notes is not None:  # Allow empty string to clear notes
+        if notes is not None:
             task['notes'] = notes
         if due:
             task['due'] = due
@@ -1125,10 +921,7 @@ async def update_task(
             body=task
         ).execute()
         
-        return json.dumps({
-            "success": True,
-            "task": updated_task
-        }, indent=2)
+        return json.dumps({"success": True, "task": updated_task}, indent=2)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
@@ -1138,24 +931,11 @@ async def complete_task(task_list_id: str, task_id: str) -> str:
     """Mark a Google Task as completed"""
     try:
         service = auth.get_tasks_service()
-        
-        task = service.tasks().get(
-            tasklist=task_list_id,
-            task=task_id
-        ).execute()
-        
+        task = service.tasks().get(tasklist=task_list_id, task=task_id).execute()
         task['status'] = 'completed'
+        updated_task = service.tasks().update(tasklist=task_list_id, task=task_id, body=task).execute()
         
-        updated_task = service.tasks().update(
-            tasklist=task_list_id,
-            task=task_id,
-            body=task
-        ).execute()
-        
-        return json.dumps({
-            "success": True,
-            "task": updated_task
-        }, indent=2)
+        return json.dumps({"success": True, "task": updated_task}, indent=2)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
@@ -1165,11 +945,7 @@ async def delete_task(task_list_id: str, task_id: str) -> str:
     """Delete a Google Task"""
     try:
         service = auth.get_tasks_service()
-        
-        service.tasks().delete(
-            tasklist=task_list_id,
-            task=task_id
-        ).execute()
+        service.tasks().delete(tasklist=task_list_id, task=task_id).execute()
         
         return json.dumps({
             "success": True,
@@ -1184,7 +960,6 @@ async def clear_completed_tasks(task_list_id: str = "@default") -> str:
     """Clear all completed tasks from a task list"""
     try:
         service = auth.get_tasks_service()
-        
         service.tasks().clear(tasklist=task_list_id).execute()
         
         return json.dumps({
@@ -1194,8 +969,67 @@ async def clear_completed_tasks(task_list_id: str = "@default") -> str:
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
+
+@mcp.tool(name="move_task_to_list")
+async def move_task_to_list(task_id: str, source_list_id: str, destination_list_id: str) -> str:
+    """Move a task between lists"""
+    try:
+        service = auth.get_tasks_service()
+        
+        task = service.tasks().get(tasklist=source_list_id, task=task_id).execute()
+        task_copy = {
+            "title": task.get("title"),
+            "notes": task.get("notes"),
+            "due": task.get("due"),
+            "status": task.get("status")
+        }
+        
+        new_task = service.tasks().insert(tasklist=destination_list_id, body=task_copy).execute()
+        service.tasks().delete(tasklist=source_list_id, task=task_id).execute()
+        
+        return json.dumps({
+            "success": True,
+            "moved_task": new_task,
+            "message": f"Task moved to list {destination_list_id}"
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="star_task")
+async def star_task(task_list_id: str, task_id: str) -> str:
+    """Star a Google Task"""
+    try:
+        service = auth.get_tasks_service()
+        updated_task = service.tasks().patch(
+            tasklist=task_list_id,
+            task=task_id,
+            body={"starred": True}
+        ).execute()
+        
+        return json.dumps({"success": True, "task": updated_task}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="unstar_task")
+async def unstar_task(task_list_id: str, task_id: str) -> str:
+    """Unstar a Google Task"""
+    try:
+        service = auth.get_tasks_service()
+        updated_task = service.tasks().patch(
+            tasklist=task_list_id,
+            task=task_id,
+            body={"starred": False}
+        ).execute()
+        
+        return json.dumps({"success": True, "task": updated_task}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
 # ============================================================================
-# GOOGLE DRIVE TOOLS (NEW - Basic)
+# GOOGLE DRIVE TOOLS
 # ============================================================================
 
 @mcp.tool(name="search_drive")
@@ -1210,7 +1044,6 @@ async def search_drive(
     Query examples:
     - "name contains 'budget'"
     - "mimeType='application/vnd.google-apps.spreadsheet'"
-    - "modifiedTime > '2025-10-01T00:00:00'"
     """
     try:
         service = auth.get_drive_service()
@@ -1336,7 +1169,8 @@ async def health_check():
 # SERVER STARTUP
 # ============================================================================
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for the server."""
     import uvicorn
     from mcp.server.sse import SseServerTransport
     from starlette.applications import Starlette
@@ -1372,3 +1206,7 @@ if __name__ == "__main__":
     print(f"Authenticated: {auth.is_authenticated()}")
     
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+
+if __name__ == "__main__":
+    main()

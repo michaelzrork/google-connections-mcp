@@ -26,11 +26,14 @@ dependencies = [
 ]
 
 [project.scripts]
-google-connections-mcp = "server:main"
+google-connections-mcp = "google_connections_mcp:main"
 
 [project.urls]
 "Homepage" = "https://github.com/michaelzrork/google-connections-mcp"
 "Repository" = "https://github.com/michaelzrork/google-connections-mcp"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [dependency-groups]
 dev = [

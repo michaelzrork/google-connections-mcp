@@ -11,7 +11,7 @@ from google.auth.transport.requests import Request as GoogleRequest
 from googleapiclient.discovery import build
 import gspread
 
-from oauth_config import ALL_SCOPES
+from google_connections_mcp.oauth_config import ALL_SCOPES
 
 
 class GoogleAuthManager:
