@@ -1079,6 +1079,162 @@ async def get_drive_file(file_id: str) -> str:
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
+@mcp.tool(name="download_drive_file")
+async def download_drive_file(file_id: str) -> str:
+    """
+    Download and return the content of a Drive file.
+    
+    Supports:
+    - Text files (.txt, .csv, .json, etc.) - returns text content
+    - PDFs - extracts and returns text content (if PyMuPDF available)
+    - Google Docs - exports as plain text
+    - Google Sheets - exports as CSV
+    - Google Slides - exports as plain text
+    - Images - returns base64-encoded data
+    - Other binary files - returns base64-encoded data
+    
+    Note: Large files may be truncated. For very large files, consider
+    using the webViewLink from get_drive_file instead.
+    """
+    try:
+        import base64
+        
+        service = auth.get_drive_service()
+        
+        # First get file metadata to determine type
+        file_meta = service.files().get(
+            fileId=file_id,
+            fields="id, name, mimeType, size"
+        ).execute()
+        
+        mime_type = file_meta.get('mimeType', '')
+        file_name = file_meta.get('name', 'unknown')
+        
+        # Handle Google Workspace files (need to export)
+        if mime_type == 'application/vnd.google-apps.document':
+            # Export Google Doc as plain text
+            content = service.files().export(
+                fileId=file_id,
+                mimeType='text/plain'
+            ).execute()
+            return json.dumps({
+                "success": True,
+                "file_name": file_name,
+                "mime_type": mime_type,
+                "content_type": "text",
+                "content": content.decode('utf-8') if isinstance(content, bytes) else content
+            }, indent=2)
+            
+        elif mime_type == 'application/vnd.google-apps.spreadsheet':
+            # Export Google Sheet as CSV
+            content = service.files().export(
+                fileId=file_id,
+                mimeType='text/csv'
+            ).execute()
+            return json.dumps({
+                "success": True,
+                "file_name": file_name,
+                "mime_type": mime_type,
+                "content_type": "csv",
+                "content": content.decode('utf-8') if isinstance(content, bytes) else content
+            }, indent=2)
+            
+        elif mime_type == 'application/vnd.google-apps.presentation':
+            # Export Google Slides as plain text
+            content = service.files().export(
+                fileId=file_id,
+                mimeType='text/plain'
+            ).execute()
+            return json.dumps({
+                "success": True,
+                "file_name": file_name,
+                "mime_type": mime_type,
+                "content_type": "text",
+                "content": content.decode('utf-8') if isinstance(content, bytes) else content
+            }, indent=2)
+        
+        # For regular files, download the content
+        request = service.files().get_media(fileId=file_id)
+        content = request.execute()
+        
+        # Handle based on mime type
+        if mime_type.startswith('text/') or mime_type in [
+            'application/json',
+            'application/xml',
+            'application/javascript',
+            'application/csv'
+        ]:
+            # Text content
+            text_content = content.decode('utf-8') if isinstance(content, bytes) else content
+            return json.dumps({
+                "success": True,
+                "file_name": file_name,
+                "mime_type": mime_type,
+                "content_type": "text",
+                "content": text_content
+            }, indent=2)
+            
+        elif mime_type == 'application/pdf':
+            # Try to extract text from PDF
+            try:
+                import fitz  # PyMuPDF
+                pdf_doc = fitz.open(stream=content, filetype="pdf")
+                text_content = ""
+                for page in pdf_doc:
+                    text_content += page.get_text()
+                pdf_doc.close()
+                return json.dumps({
+                    "success": True,
+                    "file_name": file_name,
+                    "mime_type": mime_type,
+                    "content_type": "text",
+                    "content": text_content,
+                    "note": "Text extracted from PDF"
+                }, indent=2)
+            except ImportError:
+                # PyMuPDF not available, return base64
+                return json.dumps({
+                    "success": True,
+                    "file_name": file_name,
+                    "mime_type": mime_type,
+                    "content_type": "base64",
+                    "content": base64.b64encode(content).decode('utf-8'),
+                    "note": "PDF returned as base64 (install PyMuPDF for text extraction)"
+                }, indent=2)
+            except Exception as pdf_err:
+                # PDF parsing failed, return base64
+                return json.dumps({
+                    "success": True,
+                    "file_name": file_name,
+                    "mime_type": mime_type,
+                    "content_type": "base64",
+                    "content": base64.b64encode(content).decode('utf-8'),
+                    "note": f"PDF text extraction failed: {str(pdf_err)}"
+                }, indent=2)
+        
+        elif mime_type.startswith('image/'):
+            # Return image as base64
+            return json.dumps({
+                "success": True,
+                "file_name": file_name,
+                "mime_type": mime_type,
+                "content_type": "base64",
+                "content": base64.b64encode(content).decode('utf-8')
+            }, indent=2)
+        
+        else:
+            # Other binary files - return as base64
+            return json.dumps({
+                "success": True,
+                "file_name": file_name,
+                "mime_type": mime_type,
+                "content_type": "base64",
+                "content": base64.b64encode(content).decode('utf-8')
+            }, indent=2)
+            
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
 
 # ============================================================================
 # OAUTH WEB ENDPOINTS
