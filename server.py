@@ -28,16 +28,20 @@ auth = get_auth_manager()
 # GET TIME TOOL
 # ============================================================================
 
+# Gets current date/time using a timezone parameter in the call
+# User will want to tell their AI tool their timezone in their user preferences before using the tool
+
 @mcp.tool(
     name="get_time",
-    description="Returns the current date, time, and day of week for America/New_York"
+    description="Returns the current date, time, and day of week for the specified timezone. Requires IANA timezone format (e.g., 'America/New_York', 'Europe/London', 'Asia/Tokyo', 'UTC'). If user's timezone is unknown, ask them."
 )
-async def get_time() -> dict:
-    now = datetime.now(ZoneInfo("America/New_York"))
+async def get_time(timezone: str) -> dict:
+    now = datetime.now(ZoneInfo(timezone))
     return {
         "dayOfWeek": now.strftime("%A"),
         "date": now.strftime("%Y-%m-%d"),
         "time": now.strftime("%I:%M:%S %p"),
+        "timezone": timezone,
         "isoFormat": now.isoformat()
     }
 
@@ -245,7 +249,7 @@ async def update_row_by_id(params: UpdateRowByIdInput) -> str:
             }, indent=2)
         
         row_num, _ = result
-        mapper.update_row(row_num, params.updates)
+        mapper.update_cells(row_num, params.updates)
         
         return json.dumps({
             "success": True,
