@@ -85,11 +85,39 @@ Each user deploys their own instance with their own credentials - your data stay
 2. Sign in with Google and grant permissions
 3. You'll see a success message
 4. Check Railway logs - you'll see the token JSON printed there
-5. Copy the token JSON and add it as another environment variable:
-   ```
-   GOOGLE_TOKEN_JSON = (paste the token JSON from the logs)
-   ```
-6. Redeploy one more time
+5. **Important: Format the token correctly** (see below)
+6. Add it as environment variable: `GOOGLE_TOKEN_JSON`
+7. Redeploy one more time
+
+#### Formatting the Token JSON
+
+Railway logs wrap the token in extra metadata. You need to extract just the token data.
+
+**What Railway logs show:**
+```json
+{
+  "message": "",
+  "attributes": {
+    "token": "ya29.a0ARrdaM...",
+    "refresh_token": "1//0eXy...",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "client_id": "12345...apps.googleusercontent.com",
+    "client_secret": "GOCSPX-...",
+    "scopes": ["https://www.googleapis.com/auth/calendar", ...],
+    "expiry": "2025-12-15T12:00:00Z"
+  },
+  "tags": { ... },
+  "timestamp": "2025-12-15T..."
+}
+```
+
+**What you need to paste (extract from `attributes`):**
+```json
+{"token": "ya29.a0ARrdaM...", "refresh_token": "1//0eXy...", "token_uri": "https://oauth2.googleapis.com/token", "client_id": "12345...apps.googleusercontent.com", "client_secret": "GOCSPX-...", "scopes": ["https://www.googleapis.com/auth/calendar", ...], "expiry": "2025-12-15T12:00:00Z"}
+```
+
+**Quick method:** Copy the Railway log output, paste it to Claude or ChatGPT, and ask: "Extract just the token JSON from this Railway log output and format it on one line."
+
 
 ### 4. Connect to Claude
 
