@@ -7,7 +7,7 @@ name = "google-connections-mcp"
 version = "0.1.0"
 description = "MCP server for Google Workspace APIs (Sheets, Calendar, Gmail, Drive, Tasks)"
 authors = [
-    { name = "Michael Zrork", email = "michaelzrork@gmail.com" }
+    { name = "Michael Z Rork", email = "michaelzrork@gmail.com" }
 ]
 readme = "README.md"
 requires-python = ">=3.10"
