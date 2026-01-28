@@ -1896,22 +1896,10 @@ async def download_drive_file(file_id: str) -> str:
 # OAUTH WEB ENDPOINTS
 # ============================================================================
 
-from fastapi import Request
-from fastapi.responses import RedirectResponse, JSONResponse
-from starlette.middleware.cors import CORSMiddleware
-from fastapi import FastAPI
+from starlette.requests import Request
+from starlette.responses import RedirectResponse, JSONResponse
 
-fastapi_app = FastAPI()
 
-fastapi_app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@fastapi_app.get("/oauth/start")
 async def start_oauth(request: Request):
     """Start OAuth flow"""
     try:
@@ -1932,7 +1920,6 @@ async def start_oauth(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@fastapi_app.get("/oauth/callback")
 async def oauth_callback(request: Request):
     """Handle OAuth callback"""
     try:
@@ -1967,8 +1954,7 @@ async def oauth_callback(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@fastapi_app.get("/health")
-async def health_check():
+async def health_check(request: Request):
     """Health check endpoint"""
     return JSONResponse({
         "status": "ok",
