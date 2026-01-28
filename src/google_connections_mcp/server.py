@@ -465,6 +465,60 @@ async def get_cell(params: GetCellInput) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
+# --- get_column ---
+
+class GetColumnInput(BaseModel):
+    """Input for getting all values in a column."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    column: str = Field(..., min_length=1, description="Column header name or letter")
+    mode: str = Field(default="header", description="'header' or 'letter'")
+    skip_header: bool = Field(default=True, description="Skip row 1 (header row)")
+    skip_empty: bool = Field(default=False, description="Exclude empty cells from results")
+
+@mcp.tool(name="get_column")
+async def get_column(params: GetColumnInput) -> str:
+    """
+    Get all values in a column. Returns column letter and values with row numbers.
+
+    Useful for seeing all values in a column, then using update_cells to modify them.
+    Example: get_column returns column "B", then update with {"B2": "new", "B5": "other"}
+    """
+    try:
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+
+        # Resolve column to letter
+        col_letter = _resolve_column(ws, params.column, params.mode)
+        col_num = _col_number(col_letter)
+
+        # Get all values in the column
+        col_values = ws.col_values(col_num)
+
+        # Build result with row numbers
+        values = []
+        start_row = 2 if params.skip_header else 1
+
+        for i, val in enumerate(col_values):
+            row_num = i + 1
+            if row_num < start_row:
+                continue
+            if params.skip_empty and (val is None or val == ""):
+                continue
+            values.append({"row": row_num, "value": val if val is not None else ""})
+
+        return json.dumps({
+            "success": True,
+            "column": col_letter,
+            "values": values,
+            "count": len(values)
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
 # --- update_cells ---
 
 class UpdateCellsInput(BaseModel):

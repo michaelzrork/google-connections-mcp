@@ -139,6 +139,7 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 | `query_sheet` | Query with filters, sorting, column selection. Supports date comparisons. |
 | `get_row` | Get complete row(s) by row number or unique ID lookup |
 | `get_cell` | Get cell value(s) by A1 notation (e.g., "A1", "B5") |
+| `get_column` | Get all values in a column with row numbers (for easy update_cells follow-up) |
 | `find_row_by_unique_id` | Find row number(s) by searching a column for a value |
 | `update_row` | Update specific cells in existing row(s) by row number or unique ID |
 | `update_cells` | Update cell(s) directly by A1 notation - the core write primitive |
