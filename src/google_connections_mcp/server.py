@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field, ConfigDict
 import pandas as pd
 
 from google_connections_mcp.auth_manager import get_auth_manager, create_oauth_flow
-from google_connections_mcp.sheet_mapper import get_sheet_mapper, SheetMapper
 
 # Initialize MCP server
 mcp = FastMCP("Google Connections MCP")
@@ -43,20 +42,110 @@ async def get_time(timezone: str) -> dict:
     }
 
 # ============================================================================
-# GOOGLE SHEETS - GENERIC OPERATIONS
+# GOOGLE SHEETS - INTERNAL HELPERS
 # ============================================================================
 
-class QuerySheetInput(BaseModel):
-    """Input for querying a sheet with filters."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    spreadsheet_id: str = Field(..., min_length=1)
-    worksheet_name: str = Field(..., min_length=1)
-    filters: List[Dict[str, Any]] = Field(default=[])
-    return_columns: Optional[List[str]] = Field(default=None)
-    limit: Optional[int] = Field(default=None)
-    sort_by: Optional[str] = Field(default=None)
-    sort_desc: bool = Field(default=False)
+def _col_letter(col_num: int) -> str:
+    """Convert 1-indexed column number to letter (1 -> A, 27 -> AA)."""
+    result = ""
+    while col_num > 0:
+        col_num, remainder = divmod(col_num - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
+
+
+def _col_number(letter: str) -> int:
+    """Convert column letter to 1-indexed number (A -> 1, AA -> 27)."""
+    result = 0
+    for ch in letter.upper():
+        result = result * 26 + (ord(ch) - 64)
+    return result
+
+
+def _header_to_column_letter(worksheet, header_name: str) -> str:
+    """Look up a header name in row 1 and return its column letter.
+    Raises ValueError if header not found.
+    """
+    headers = worksheet.row_values(1)
+    try:
+        idx = headers.index(header_name)
+    except ValueError:
+        available = ', '.join(headers) if headers else 'none'
+        raise ValueError(f"Header '{header_name}' not found. Available: {available}")
+    return _col_letter(idx + 1)
+
+
+def _resolve_column(worksheet, column_ref: str, mode: str) -> str:
+    """Resolve a column reference to a letter.
+    mode='header': looks up header_name -> letter via row 1.
+    mode='letter': passes through as-is (uppercased).
+    """
+    if mode == 'header':
+        return _header_to_column_letter(worksheet, column_ref)
+    elif mode == 'letter':
+        return column_ref.upper()
+    else:
+        raise ValueError(f"Invalid mode '{mode}'. Must be 'header' or 'letter'.")
+
+
+def _get_worksheet(spreadsheet_id: str, worksheet_name: str):
+    """Get a gspread worksheet object."""
+    sheets_client = auth.get_sheets_client()
+    spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+    return spreadsheet.worksheet(worksheet_name)
+
+
+def _find_rows_by_value(worksheet, column_letter: str, value: str) -> List[int]:
+    """Find all row numbers where the given column has the given value.
+    Returns list of 1-indexed row numbers. Skips row 1 (header).
+    """
+    col_num = _col_number(column_letter)
+    col_values = worksheet.col_values(col_num)
+    matches = []
+    for i, cell_val in enumerate(col_values):
+        if i == 0:
+            continue
+        if cell_val == value:
+            matches.append(i + 1)
+    return matches
+
+
+def _resolve_row_id(worksheet, obj: Dict[str, Any], mode: str) -> int:
+    """Resolve a row from an object that has either 'row' or unique_id fields.
+    Returns row number. Raises ValueError on failure.
+    """
+    has_row = 'row' in obj
+    has_uid = 'unique_id_column' in obj and 'unique_id_value' in obj
+
+    if has_row and has_uid:
+        raise ValueError("Cannot provide both 'row' and 'unique_id_column'/'unique_id_value'.")
+    if not has_row and not has_uid:
+        raise ValueError("Must provide either 'row' or 'unique_id_column' + 'unique_id_value'.")
+
+    if has_row:
+        row = obj['row']
+        if not isinstance(row, int) or row < 1:
+            raise ValueError(f"Row must be an integer >= 1, got {row}")
+        return row
+
+    col_letter = _resolve_column(worksheet, obj['unique_id_column'], mode)
+    matches = _find_rows_by_value(worksheet, col_letter, obj['unique_id_value'])
+
+    if len(matches) == 0:
+        raise ValueError(f"No match for {obj['unique_id_column']}='{obj['unique_id_value']}'")
+    if len(matches) > 1:
+        raise ValueError(
+            f"Multiple matches for {obj['unique_id_column']}='{obj['unique_id_value']}': "
+            f"rows {matches}. Use query_sheet or get_row to identify the correct row, "
+            f"then retry with explicit row number."
+        )
+    return matches[0]
+
+
+def _row_to_letter_dict(row_data: List) -> Dict[str, str]:
+    """Convert a list of cell values to a dict keyed by column letters."""
+    return {_col_letter(i + 1): val for i, val in enumerate(row_data)}
+
 
 def parse_datetime(value):
     """Parse a value as datetime, supporting multiple formats."""
@@ -79,39 +168,86 @@ def parse_datetime(value):
                 continue
     return None
 
+
+# ============================================================================
+# GOOGLE SHEETS - TOOLS
+# ============================================================================
+
+# --- query_sheet ---
+
+class QuerySheetInput(BaseModel):
+    """Input for querying a sheet with filters."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    mode: str = Field(default="header", description="'header' or 'letter'")
+    filters: List[Dict[str, Any]] = Field(default=[])
+    return_columns: Optional[List[str]] = Field(default=None)
+    limit: Optional[int] = Field(default=None)
+    sort_by: Optional[str] = Field(default=None)
+    sort_desc: bool = Field(default=False)
+
 @mcp.tool(name="query_sheet")
 async def query_sheet(params: QuerySheetInput) -> str:
     """
-    Query a Google Sheet with flexible filtering.
-    
+    Query a Google Sheet with flexible filtering. Returns matching rows with _row_number.
+
+    Results always use column letters as keys (e.g. "A", "B").
+
     Filters support:
-    - {'field': 'Status', 'operator': '==', 'value': 'FALSE'}
-    - {'field': 'Do Date', 'operator': '<=', 'value': '2025-10-27'}
-    - {'field': 'Category', 'operator': 'in', 'value': ['Work', 'Job Search']}
-    
+    - {'field': 'Company', 'operator': '==', 'value': 'Acme'}  (mode: header)
+    - {'field': 'A', 'operator': '==', 'value': 'Acme'}  (mode: letter)
+
     Operators: ==, !=, >, <, >=, <=, in, not in, contains, not contains, is_null, not_null
-    
-    Date/time operators (>, <, >=, <=, ==, !=) automatically parse datetime values.
+    Date/time operators automatically parse datetime values.
     """
     try:
-        sheets_client = auth.get_sheets_client()
-        mapper = get_sheet_mapper(sheets_client, params.spreadsheet_id, params.worksheet_name)
-        df = mapper.to_dataframe()
-        
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+        all_data = ws.get_all_values()
+
+        if not all_data:
+            return json.dumps({"success": True, "data": [], "count": 0}, indent=2)
+
+        headers = all_data[0]
+        rows = all_data[1:]
+
+        # Build header-to-letter mapping for header mode
+        if params.mode == 'header':
+            col_map = {}
+            for i, h in enumerate(headers):
+                col_map[h] = _col_letter(i + 1)
+        else:
+            col_map = None
+
+        # DataFrame with column letters as column names
+        letter_cols = [_col_letter(i + 1) for i in range(len(headers))]
+        df = pd.DataFrame(rows, columns=letter_cols)
+        df['_row_number'] = range(2, len(rows) + 2)
+
+        # Apply filters
         for filter_def in params.filters:
             field = filter_def['field']
             operator = filter_def['operator']
-            value = filter_def['value']
-            
-            if field not in df.columns:
+            value = filter_def.get('value')
+
+            # Resolve field to column letter
+            if params.mode == 'header':
+                if field not in col_map:
+                    continue
+                col = col_map[field]
+            else:
+                col = field.upper()
+
+            if col not in df.columns:
                 continue
-            
+
             if operator in ['>', '<', '>=', '<=', '==', '!=']:
                 filter_dt = parse_datetime(value)
                 if filter_dt is not None:
-                    df_dts = pd.Series([parse_datetime(val) for val in df[field]], index=df.index)
+                    df_dts = pd.Series([parse_datetime(val) for val in df[col]], index=df.index)
                     valid_mask = df_dts.notna()
-                    
+
                     if operator == '==':
                         mask = valid_mask & (df_dts == filter_dt)
                     elif operator == '!=':
@@ -124,189 +260,490 @@ async def query_sheet(params: QuerySheetInput) -> str:
                         mask = valid_mask & (df_dts >= filter_dt)
                     elif operator == '<=':
                         mask = valid_mask & (df_dts <= filter_dt)
-                    
+
                     df = df[mask]
                     continue
-            
+
             if operator == '==':
-                df = df[df[field] == value]
+                df = df[df[col] == value]
             elif operator == '!=':
-                df = df[df[field] != value]
+                df = df[df[col] != value]
             elif operator == '>':
-                df = df[df[field] > value]
+                df = df[df[col] > value]
             elif operator == '<':
-                df = df[df[field] < value]
+                df = df[df[col] < value]
             elif operator == '>=':
-                df = df[df[field] >= value]
+                df = df[df[col] >= value]
             elif operator == '<=':
-                df = df[df[field] <= value]
+                df = df[df[col] <= value]
             elif operator == 'in':
-                df = df[df[field].isin(value)]
+                df = df[df[col].isin(value)]
             elif operator == 'not in':
-                df = df[~df[field].isin(value)]
+                df = df[~df[col].isin(value)]
             elif operator == 'contains':
-                df = df[df[field].str.contains(value, case=False, na=False)]
+                df = df[df[col].str.contains(value, case=False, na=False)]
             elif operator == 'not contains':
-                df = df[~df[field].str.contains(value, case=False, na=False)]
+                df = df[~df[col].str.contains(value, case=False, na=False)]
             elif operator == 'is_null':
-                df = df[df[field].isna() | (df[field] == '')]
+                df = df[df[col].isna() | (df[col] == '')]
             elif operator == 'not_null':
-                df = df[df[field].notna() & (df[field] != '')]
-        
+                df = df[df[col].notna() & (df[col] != '')]
+
+        # return_columns
         if params.return_columns:
-            available_cols = [col for col in params.return_columns if col in df.columns]
-            if available_cols:
-                df = df[available_cols]
-        
-        if params.sort_by and params.sort_by in df.columns:
-            df = df.sort_values(by=params.sort_by, ascending=not params.sort_desc)
-        
+            if params.mode == 'header':
+                resolved = [col_map[c] for c in params.return_columns if c in col_map]
+            else:
+                resolved = [c.upper() for c in params.return_columns]
+            resolved.append('_row_number')
+            available = [c for c in resolved if c in df.columns]
+            if available:
+                df = df[available]
+
+        if params.sort_by:
+            sort_col = col_map[params.sort_by] if params.mode == 'header' and col_map and params.sort_by in col_map else params.sort_by
+            if sort_col in df.columns:
+                df = df.sort_values(by=sort_col, ascending=not params.sort_desc)
+
         if params.limit:
             df = df.head(params.limit)
-        
+
         result = df.to_dict('records')
-        
-        return json.dumps({
-            "success": True,
-            "data": result,
-            "count": len(result)
-        }, indent=2)
-        
+
+        return json.dumps({"success": True, "data": result, "count": len(result)}, indent=2)
+
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-class FindRowByIdInput(BaseModel):
-    """Input for finding a row by ID."""
+# --- find_row_by_unique_id ---
+
+class FindRowByUniqueIdInput(BaseModel):
+    """Input for finding rows by unique ID lookups."""
     model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
+
     spreadsheet_id: str = Field(..., min_length=1)
     worksheet_name: str = Field(..., min_length=1)
-    id_column: str = Field(..., min_length=1)
-    id_value: str = Field(..., min_length=1)
+    mode: str = Field(default="header", description="'header' or 'letter'")
+    lookups: List[Dict[str, str]] = Field(..., min_length=1, description="Array of {column, value}")
 
-@mcp.tool(name="find_row_by_id")
-async def find_row_by_id(params: FindRowByIdInput) -> str:
-    """Find the row number for a specific ID value."""
+@mcp.tool(name="find_row_by_unique_id")
+async def find_row_by_unique_id(params: FindRowByUniqueIdInput) -> str:
+    """
+    Look up row number(s) by searching for a value in a column.
+    Intended for unique values but returns all matches.
+
+    Each lookup: {"column": "ID", "value": "abc123"}
+
+    Response per lookup:
+    - 1 match: {"success": true, "row_number": 23}
+    - Multiple: {"success": false, "error": "multiple_matches", "row_numbers": [6, 8]}
+    - None: {"success": false, "error": "no_match"}
+    """
     try:
-        sheets_client = auth.get_sheets_client()
-        mapper = get_sheet_mapper(sheets_client, params.spreadsheet_id, params.worksheet_name)
-        
-        result = mapper.find_row_by_value(params.id_column, params.id_value)
-        
-        if result:
-            row_num, row_data = result
-            return json.dumps({
-                "success": True,
-                "row_number": row_num,
-                "row_data": mapper.row_to_dict(row_data)
-            }, indent=2)
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+
+        results = []
+        for lookup in params.lookups:
+            column = lookup['column']
+            value = lookup['value']
+
+            letter = _resolve_column(ws, column, params.mode)
+            matches = _find_rows_by_value(ws, letter, value)
+
+            if len(matches) == 1:
+                results.append({"column": column, "value": value, "success": True, "row_number": matches[0]})
+            elif len(matches) > 1:
+                results.append({"column": column, "value": value, "success": False, "error": "multiple_matches", "row_numbers": matches})
+            else:
+                results.append({"column": column, "value": value, "success": False, "error": "no_match"})
+
+        return json.dumps({"results": results}, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# --- get_row ---
+
+class GetRowInput(BaseModel):
+    """Input for getting rows."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    unique_id_mode: Optional[str] = Field(default="header", description="'header' or 'letter' for unique_id lookups")
+    rows: List[Dict[str, Any]] = Field(..., min_length=1, description="Array of {row} or {unique_id_column, unique_id_value}")
+
+@mcp.tool(name="get_row")
+async def get_row(params: GetRowInput) -> str:
+    """
+    Get one or more complete rows by row number or unique_id lookup.
+    Returns data with column letters as keys.
+
+    Each entry: {"row": 6} or {"unique_id_column": "Company", "unique_id_value": "Acme"}
+    """
+    try:
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+        all_data = ws.get_all_values()
+
+        fetched = []
+        skipped = []
+
+        for obj in params.rows:
+            try:
+                mode = params.unique_id_mode or 'header'
+                row_num = _resolve_row_id(ws, obj, mode)
+
+                idx = row_num - 1
+                if idx < 0 or idx >= len(all_data):
+                    skipped.append({**obj, "reason": f"Row {row_num} out of range (sheet has {len(all_data)} rows)"})
+                    continue
+
+                row_data = _row_to_letter_dict(all_data[idx])
+                row_data['_row_number'] = row_num
+                fetched.append(row_data)
+
+            except ValueError as ve:
+                skipped.append({**obj, "reason": str(ve)})
+
+        return json.dumps({"success": True, "rows": fetched, "skipped": skipped}, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# --- get_cell ---
+
+class GetCellInput(BaseModel):
+    """Input for getting cells by A1 notation."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    cells: List[str] = Field(..., min_length=1, description="Array of A1 cell refs, e.g. ['A1', 'B5']")
+
+@mcp.tool(name="get_cell")
+async def get_cell(params: GetCellInput) -> str:
+    """Get one or more cell values by A1 notation."""
+    try:
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+
+        result = {}
+        for cell_ref in params.cells:
+            try:
+                val = ws.acell(cell_ref).value
+                result[cell_ref] = val if val is not None else ""
+            except Exception:
+                result[cell_ref] = ""
+
+        return json.dumps({"success": True, "cells": result}, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# --- update_cells ---
+
+class UpdateCellsInput(BaseModel):
+    """Input for updating cells by A1 notation."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    updates: Dict[str, Any] = Field(..., description="Object of {cell_ref: value}, e.g. {'A16': 'hello', 'C16': 42}")
+
+@mcp.tool(name="update_cells")
+async def update_cells(params: UpdateCellsInput) -> str:
+    """
+    Update one or more cells by A1 notation. Core write primitive.
+    All cell writes go through here.
+    """
+    try:
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+
+        for cell_ref, value in params.updates.items():
+            ws.update(cell_ref, [[value]], value_input_option='USER_ENTERED')
+
+        return json.dumps({"success": True, "updated_cells": list(params.updates.keys())}, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# --- update_row ---
+
+class UpdateRowInput(BaseModel):
+    """Input for updating rows."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    mode: str = Field(default="header", description="'header' or 'letter'")
+    updates: List[Dict[str, Any]] = Field(..., min_length=1)
+
+@mcp.tool(name="update_row")
+async def update_row(params: UpdateRowInput) -> str:
+    """
+    Update one or more existing rows. Each update object must have either
+    'row' (int) or 'unique_id_column' + 'unique_id_value'. Remaining keys
+    are column references (header names or letters based on mode) mapped to values.
+
+    Builds A1 refs then writes cells internally.
+    """
+    try:
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+
+        reserved_keys = {'row', 'unique_id_column', 'unique_id_value'}
+        updated = []
+        skipped = []
+
+        for obj in params.updates:
+            try:
+                row_num = _resolve_row_id(ws, obj, params.mode)
+
+                cell_updates = {}
+                columns_updated = []
+                for key, value in obj.items():
+                    if key in reserved_keys:
+                        continue
+                    letter = _resolve_column(ws, key, params.mode)
+                    cell_updates[f"{letter}{row_num}"] = value
+                    columns_updated.append(key)
+
+                for cell_ref, value in cell_updates.items():
+                    ws.update(cell_ref, [[value]], value_input_option='USER_ENTERED')
+
+                updated.append({"row": row_num, "columns_updated": columns_updated})
+
+            except ValueError as ve:
+                skip_entry = {"reason": str(ve)}
+                if 'unique_id_column' in obj:
+                    skip_entry['unique_id_column'] = obj['unique_id_column']
+                    skip_entry['unique_id_value'] = obj.get('unique_id_value')
+                if 'row' in obj:
+                    skip_entry['row'] = obj['row']
+                skipped.append(skip_entry)
+
+        return json.dumps({"success": True, "updated": updated, "skipped": skipped}, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# --- add_row ---
+
+class AddRowInput(BaseModel):
+    """Input for adding rows."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    mode: str = Field(default="header", description="'header' or 'letter'")
+    rows: List[Dict[str, Any]] = Field(..., min_length=1)
+
+@mcp.tool(name="add_row")
+async def add_row(params: AddRowInput) -> str:
+    """
+    Add one or more new rows to the next empty row(s).
+    Each object's keys are column references (header names or letters based on mode).
+    Always appends — does not accept row numbers.
+    """
+    try:
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+
+        all_data = ws.get_all_values()
+        next_row = len(all_data) + 1
+
+        added = []
+        for row_obj in params.rows:
+            cell_updates = {}
+            for key, value in row_obj.items():
+                letter = _resolve_column(ws, key, params.mode)
+                cell_updates[f"{letter}{next_row}"] = value
+
+            for cell_ref, value in cell_updates.items():
+                ws.update(cell_ref, [[value]], value_input_option='USER_ENTERED')
+
+            added.append({"row": next_row})
+            next_row += 1
+
+        return json.dumps({"success": True, "added": added}, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# --- delete_row ---
+
+class DeleteRowInput(BaseModel):
+    """Input for deleting rows."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    unique_id_mode: Optional[str] = Field(default="header", description="'header' or 'letter' for unique_id lookups")
+    deletions: List[Dict[str, Any]] = Field(..., min_length=1, description="Array of {row} or {unique_id_column, unique_id_value}")
+
+@mcp.tool(name="delete_row")
+async def delete_row(params: DeleteRowInput) -> str:
+    """
+    Delete one or more rows by row number or unique_id lookup.
+    Deletes highest row numbers first to avoid row-shifting issues.
+    """
+    try:
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+
+        resolved = []
+        skipped = []
+        mode = params.unique_id_mode or 'header'
+
+        for obj in params.deletions:
+            try:
+                row_num = _resolve_row_id(ws, obj, mode)
+                resolved.append(row_num)
+            except ValueError as ve:
+                skip_entry = {"reason": str(ve)}
+                if 'unique_id_column' in obj:
+                    skip_entry['unique_id_column'] = obj['unique_id_column']
+                    skip_entry['unique_id_value'] = obj.get('unique_id_value')
+                if 'row' in obj:
+                    skip_entry['row'] = obj['row']
+                skipped.append(skip_entry)
+
+        for rn in sorted(resolved, reverse=True):
+            ws.delete_rows(rn)
+
+        return json.dumps({"success": True, "deleted": sorted(resolved, reverse=True), "skipped": skipped}, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# --- add_column ---
+
+class AddColumnInput(BaseModel):
+    """Input for adding a column."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    header: str = Field(..., min_length=1)
+    column: Optional[str] = Field(default=None, description="Column letter (e.g. 'N'). Auto-detects next empty if omitted.")
+
+@mcp.tool(name="add_column")
+async def add_column(params: AddColumnInput) -> str:
+    """
+    Add a new column with a header. Auto-detects next empty column if not specified.
+    Writes the header to row 1 of the target column.
+    """
+    try:
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+
+        if params.column:
+            target = params.column.upper()
         else:
-            return json.dumps({
-                "success": False,
-                "error": f"No row found with {params.id_column}='{params.id_value}'"
-            }, indent=2)
-        
+            headers = ws.row_values(1)
+            target = _col_letter(len(headers) + 1)
+
+        ws.update(f"{target}1", [[params.header]], value_input_option='USER_ENTERED')
+
+        return json.dumps({"success": True, "column": target, "header": params.header}, indent=2)
+
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-class UpdateRowByIdInput(BaseModel):
-    """Input for updating a row by ID."""
+# --- delete_column ---
+
+class DeleteColumnInput(BaseModel):
+    """Input for deleting a column."""
     model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
+
     spreadsheet_id: str = Field(..., min_length=1)
     worksheet_name: str = Field(..., min_length=1)
-    id_column: str = Field(..., min_length=1)
-    id_value: str = Field(..., min_length=1)
-    updates: Dict[str, Any] = Field(...)
+    mode: str = Field(default="header", description="'header' or 'letter'")
+    column: str = Field(..., min_length=1, description="Header name or column letter")
 
-@mcp.tool(name="update_row_by_id")
-async def update_row_by_id(params: UpdateRowByIdInput) -> str:
-    """Update specific columns in a row by ID."""
+@mcp.tool(name="delete_column")
+async def delete_column(params: DeleteColumnInput) -> str:
+    """Delete a column by header name or letter."""
     try:
-        sheets_client = auth.get_sheets_client()
-        mapper = get_sheet_mapper(sheets_client, params.spreadsheet_id, params.worksheet_name)
-        
-        result = mapper.find_row_by_value(params.id_column, params.id_value)
-        
-        if not result:
-            return json.dumps({
-                "success": False,
-                "error": f"No row found with {params.id_column}='{params.id_value}'"
-            }, indent=2)
-        
-        row_num, _ = result
-        mapper.update_cells(row_num, params.updates)
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Updated row {row_num}"
-        }, indent=2)
-        
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+
+        letter = _resolve_column(ws, params.column, params.mode)
+        col_num = _col_number(letter)
+        ws.delete_columns(col_num)
+
+        return json.dumps({"success": True, "deleted_column": letter}, indent=2)
+
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-class DeleteRowByIdInput(BaseModel):
-    """Input for deleting a row by ID."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    spreadsheet_id: str = Field(..., min_length=1)
-    worksheet_name: str = Field(..., min_length=1)
-    id_column: str = Field(..., min_length=1)
-    id_value: str = Field(..., min_length=1)
+# --- create_spreadsheet ---
 
-@mcp.tool(name="delete_row_by_id")
-async def delete_row_by_id(params: DeleteRowByIdInput) -> str:
-    """Delete a row by ID."""
+class CreateSpreadsheetInput(BaseModel):
+    """Input for creating a spreadsheet."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+
+    title: str = Field(..., min_length=1)
+    worksheets: Optional[List[str]] = Field(default=None, description="Optional list of worksheet names to create")
+
+@mcp.tool(name="create_spreadsheet")
+async def create_spreadsheet(params: CreateSpreadsheetInput) -> str:
+    """Create a new Google Sheets document."""
     try:
         sheets_client = auth.get_sheets_client()
-        mapper = get_sheet_mapper(sheets_client, params.spreadsheet_id, params.worksheet_name)
-        
-        result = mapper.find_row_by_value(params.id_column, params.id_value)
-        
-        if not result:
-            return json.dumps({
-                "success": False,
-                "error": f"No row found with {params.id_column}='{params.id_value}'"
-            }, indent=2)
-        
-        row_num, _ = result
-        mapper.worksheet.delete_rows(row_num)
-        
+        spreadsheet = sheets_client.create(params.title)
+
+        if params.worksheets:
+            default_ws = spreadsheet.sheet1
+            default_ws.update_title(params.worksheets[0])
+            for ws_name in params.worksheets[1:]:
+                spreadsheet.add_worksheet(title=ws_name, rows=1000, cols=26)
+
         return json.dumps({
             "success": True,
-            "message": f"Deleted row {row_num}"
+            "spreadsheet_id": spreadsheet.id,
+            "title": params.title,
+            "worksheets": params.worksheets or ["Sheet1"],
+            "url": f"https://docs.google.com/spreadsheets/d/{spreadsheet.id}"
         }, indent=2)
-        
+
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-class AppendRowsInput(BaseModel):
-    """Input for appending rows."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-    
-    spreadsheet_id: str = Field(..., min_length=1)
-    worksheet_name: str = Field(..., min_length=1)
-    values: List[Dict[str, Any]] = Field(..., min_length=1)
+# --- add_worksheet ---
 
-@mcp.tool(name="append_rows")
-async def append_rows(params: AppendRowsInput) -> str:
-    """Append multiple rows to sheet. Each row is a dict of column_name: value."""
+@mcp.tool(name="add_worksheet")
+async def add_worksheet(spreadsheet_id: str, title: str) -> str:
+    """Add a new worksheet (tab) to an existing spreadsheet."""
     try:
         sheets_client = auth.get_sheets_client()
-        mapper = get_sheet_mapper(sheets_client, params.spreadsheet_id, params.worksheet_name)
-        
-        for row_dict in params.values:
-            mapper.append_row(row_dict)
-        
-        return json.dumps({
-            "success": True,
-            "message": f"Appended {len(params.values)} rows"
-        }, indent=2)
-        
+        spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+        spreadsheet.add_worksheet(title=title, rows=1000, cols=26)
+
+        return json.dumps({"success": True, "worksheet_name": title}, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# --- delete_worksheet ---
+
+@mcp.tool(name="delete_worksheet")
+async def delete_worksheet(spreadsheet_id: str, worksheet_name: str) -> str:
+    """Delete a worksheet (tab) from a spreadsheet."""
+    try:
+        sheets_client = auth.get_sheets_client()
+        spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+        ws = spreadsheet.worksheet(worksheet_name)
+        spreadsheet.del_worksheet(ws)
+
+        return json.dumps({"success": True, "deleted_worksheet": worksheet_name}, indent=2)
+
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
