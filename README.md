@@ -4,7 +4,7 @@ A Model Context Protocol (MCP) server that provides AI assistants with access to
 
 ## Features
 
-- **Google Sheets** - Query, append, update, and delete rows with formula-safe cell-level updates
+- **Google Sheets** - Full spreadsheet control with flexible row/column addressing (by header name or column letter), cell-level operations, and worksheet management
 - **Google Calendar** - List, create, update, and delete events across all your calendars
 - **Gmail** - Read, send, search, label, archive, and manage messages
 - **Google Tasks** - Full task and task list management
@@ -132,17 +132,29 @@ You're done! Claude can now access your Google services.
 
 ### Google Sheets
 
+All Sheets tools support a `mode` parameter: `"header"` (default) uses column header names, `"letter"` uses column letters (A, B, C...).
+
 | Tool | Description |
 |------|-------------|
 | `query_sheet` | Query with filters, sorting, column selection. Supports date comparisons. |
-| `append_rows` | Add new rows (formula-safe - won't overwrite formula columns) |
-| `update_row_by_id` | Update specific cells by ID column (formula-safe) |
-| `delete_row_by_id` | Delete a row by ID column |
-| `find_row_by_id` | Find row number and data by ID |
+| `get_row` | Get complete row(s) by row number or unique ID lookup |
+| `get_cell` | Get cell value(s) by A1 notation (e.g., "A1", "B5") |
+| `find_row_by_unique_id` | Find row number(s) by searching a column for a value |
+| `update_row` | Update specific cells in existing row(s) by row number or unique ID |
+| `update_cells` | Update cell(s) directly by A1 notation - the core write primitive |
+| `add_row` | Append new row(s) to the sheet |
+| `delete_row` | Delete row(s) by row number or unique ID lookup |
+| `add_column` | Add a new column with a header (auto-detects next empty column) |
+| `delete_column` | Delete a column by header name or letter |
+| `create_spreadsheet` | Create a new Google Sheets document with optional worksheets |
+| `add_worksheet` | Add a new worksheet (tab) to an existing spreadsheet |
+| `delete_worksheet` | Delete a worksheet from a spreadsheet |
 
 **Query Operators**: `==`, `!=`, `>`, `<`, `>=`, `<=`, `in`, `not in`, `contains`, `not contains`, `is_null`, `not_null`
 
-**Date Handling**: Date columns are automatically parsed and compared correctly, regardless of format (`MM/DD/YYYY`, `YYYY-MM-DD`, etc.)
+**Date Handling**: Date columns are automatically parsed and compared correctly. Use `==` with full date strings (e.g., `1/27/2026` or `2026-01-27`) for exact matching. Avoid `contains` for dates as it does substring matching.
+
+**Row Identification**: Tools that modify rows accept either `{"row": 6}` for direct row numbers, or `{"unique_id_column": "ID", "unique_id_value": "abc123"}` for lookup-based identification.
 
 ### Google Calendar
 
