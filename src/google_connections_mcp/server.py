@@ -200,7 +200,13 @@ async def query_sheet(params: QuerySheetInput) -> str:
     - {'field': 'A', 'operator': '==', 'value': 'Acme'}  (mode: letter)
 
     Operators: ==, !=, >, <, >=, <=, in, not in, contains, not contains, is_null, not_null
-    Date/time operators automatically parse datetime values.
+    Date/time operators (==, !=, >, <, >=, <=) automatically parse datetime values.
+
+    IMPORTANT for date filtering:
+    - Use == with a FULL date string (e.g. '1/27/2026' or '2026-01-27') for exact date matching.
+    - Do NOT use 'contains' for dates — it does substring matching (e.g. '1/27' matches '11/27/2025').
+    - Supported date formats: m/d/YYYY, YYYY-MM-DD, m/d/YYYY h:MM AM/PM, YYYY-MM-DD HH:MM:SS.
+    - The filter value format must match what's stored in the sheet cells.
     """
     try:
         ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
