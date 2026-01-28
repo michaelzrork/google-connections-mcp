@@ -168,9 +168,11 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 | `list_calendars` | List all calendars |
 | `list_calendar_events` | List events with time range and search |
 | `get_calendar_event` | Get specific event details |
-| `create_calendar_event` | Create new event with optional attendees/reminders |
+| `create_calendar_event` | Create new event with optional attendees/reminders/timezone |
 | `update_calendar_event` | Modify existing event |
 | `delete_calendar_event` | Remove event |
+
+**Timezone**: `create_calendar_event` and `update_calendar_event` accept an optional `timezone` parameter (IANA format, e.g., `'America/New_York'`, `'Europe/London'`, `'UTC'`). If omitted, uses the calendar's default timezone.
 
 ### Gmail
 

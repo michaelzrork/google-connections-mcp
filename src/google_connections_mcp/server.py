@@ -1010,18 +1010,32 @@ async def create_calendar_event(
     description: str = None,
     location: str = None,
     attendees: list = None,
-    reminders: dict = None
+    reminders: dict = None,
+    timezone: str = None
 ) -> str:
-    """Create a calendar event"""
+    """
+    Create a calendar event.
+
+    Args:
+        timezone: IANA timezone (e.g., 'America/New_York', 'Europe/London', 'UTC').
+                  If not provided, uses the calendar's default timezone.
+    """
     try:
         service = auth.get_calendar_service()
-        
+
+        # Build start/end with optional timezone
+        start_obj = {'dateTime': start_time}
+        end_obj = {'dateTime': end_time}
+        if timezone:
+            start_obj['timeZone'] = timezone
+            end_obj['timeZone'] = timezone
+
         event_body = {
             'summary': summary,
-            'start': {'dateTime': start_time, 'timeZone': 'America/New_York'},
-            'end': {'dateTime': end_time, 'timeZone': 'America/New_York'}
+            'start': start_obj,
+            'end': end_obj
         }
-        
+
         if description:
             event_body['description'] = description
         if location:
@@ -1030,9 +1044,9 @@ async def create_calendar_event(
             event_body['attendees'] = [{'email': email} for email in attendees]
         if reminders:
             event_body['reminders'] = reminders
-        
+
         event = service.events().insert(calendarId=calendar_id, body=event_body).execute()
-        
+
         return json.dumps({
             "success": True,
             "event": event,
@@ -1050,30 +1064,47 @@ async def update_calendar_event(
     start_time: str = None,
     end_time: str = None,
     description: str = None,
-    location: str = None
+    location: str = None,
+    timezone: str = None
 ) -> str:
-    """Update an existing calendar event"""
+    """
+    Update an existing calendar event.
+
+    Args:
+        timezone: IANA timezone for start/end times (e.g., 'America/New_York', 'UTC').
+                  If not provided when updating times, preserves existing timezone.
+    """
     try:
         service = auth.get_calendar_service()
         event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
-        
+
         if summary:
             event['summary'] = summary
         if start_time:
-            event['start'] = {'dateTime': start_time, 'timeZone': 'America/New_York'}
+            start_obj = {'dateTime': start_time}
+            if timezone:
+                start_obj['timeZone'] = timezone
+            elif 'timeZone' in event.get('start', {}):
+                start_obj['timeZone'] = event['start']['timeZone']
+            event['start'] = start_obj
         if end_time:
-            event['end'] = {'dateTime': end_time, 'timeZone': 'America/New_York'}
+            end_obj = {'dateTime': end_time}
+            if timezone:
+                end_obj['timeZone'] = timezone
+            elif 'timeZone' in event.get('end', {}):
+                end_obj['timeZone'] = event['end']['timeZone']
+            event['end'] = end_obj
         if description:
             event['description'] = description
         if location:
             event['location'] = location
-        
+
         updated_event = service.events().update(
             calendarId=calendar_id,
             eventId=event_id,
             body=event
         ).execute()
-        
+
         return json.dumps({"success": True, "event": updated_event}, indent=2)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
