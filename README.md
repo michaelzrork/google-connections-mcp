@@ -149,6 +149,10 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 | `create_spreadsheet` | Create a new Google Sheets document with optional worksheets |
 | `add_worksheet` | Add a new worksheet (tab) to an existing spreadsheet |
 | `delete_worksheet` | Delete a worksheet from a spreadsheet |
+| `list_worksheets` | List all worksheets in a spreadsheet with their properties |
+| `rename_worksheet` | Rename a worksheet |
+| `get_spreadsheet_info` | Get spreadsheet metadata (title, URL, all worksheets) |
+| `clear_range` | Clear cell contents in a range without deleting rows/columns |
 
 **Query Operators**: `==`, `!=`, `>`, `<`, `>=`, `<=`, `in`, `not in`, `contains`, `not contains`, `is_null`, `not_null`
 

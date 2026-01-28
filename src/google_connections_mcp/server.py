@@ -147,6 +147,22 @@ def _row_to_letter_dict(row_data: List) -> Dict[str, str]:
     return {_col_letter(i + 1): val for i, val in enumerate(row_data)}
 
 
+def _batch_update_cells(worksheet, updates: Dict[str, Any]) -> None:
+    """Batch update cells - single API call for all updates.
+
+    Args:
+        worksheet: gspread worksheet object
+        updates: dict of {cell_ref: value}, e.g. {'A1': 'hello', 'B2': 42}
+    """
+    if not updates:
+        return
+    batch_data = [
+        {'range': cell_ref, 'values': [[value]]}
+        for cell_ref, value in updates.items()
+    ]
+    worksheet.batch_update(batch_data, value_input_option='USER_ENTERED')
+
+
 def parse_datetime(value):
     """Parse a value as datetime, supporting multiple formats."""
     if pd.isna(value) or value == '':
@@ -463,14 +479,11 @@ class UpdateCellsInput(BaseModel):
 async def update_cells(params: UpdateCellsInput) -> str:
     """
     Update one or more cells by A1 notation. Core write primitive.
-    All cell writes go through here.
+    Uses batch update for efficiency - single API call for all cells.
     """
     try:
         ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
-
-        for cell_ref, value in params.updates.items():
-            ws.update(cell_ref, [[value]], value_input_option='USER_ENTERED')
-
+        _batch_update_cells(ws, params.updates)
         return json.dumps({"success": True, "updated_cells": list(params.updates.keys())}, indent=2)
 
     except Exception as e:
@@ -495,7 +508,7 @@ async def update_row(params: UpdateRowInput) -> str:
     'row' (int) or 'unique_id_column' + 'unique_id_value'. Remaining keys
     are column references (header names or letters based on mode) mapped to values.
 
-    Builds A1 refs then writes cells internally.
+    Uses batch update for efficiency - all cells updated in a single API call.
     """
     try:
         ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
@@ -503,12 +516,12 @@ async def update_row(params: UpdateRowInput) -> str:
         reserved_keys = {'row', 'unique_id_column', 'unique_id_value'}
         updated = []
         skipped = []
+        cell_updates = {}  # Collect all updates for single batch call
 
         for obj in params.updates:
             try:
                 row_num = _resolve_row_id(ws, obj, params.mode)
 
-                cell_updates = {}
                 columns_updated = []
                 for key, value in obj.items():
                     if key in reserved_keys:
@@ -516,9 +529,6 @@ async def update_row(params: UpdateRowInput) -> str:
                     letter = _resolve_column(ws, key, params.mode)
                     cell_updates[f"{letter}{row_num}"] = value
                     columns_updated.append(key)
-
-                for cell_ref, value in cell_updates.items():
-                    ws.update(cell_ref, [[value]], value_input_option='USER_ENTERED')
 
                 updated.append({"row": row_num, "columns_updated": columns_updated})
 
@@ -530,6 +540,8 @@ async def update_row(params: UpdateRowInput) -> str:
                 if 'row' in obj:
                     skip_entry['row'] = obj['row']
                 skipped.append(skip_entry)
+
+        _batch_update_cells(ws, cell_updates)
 
         return json.dumps({"success": True, "updated": updated, "skipped": skipped}, indent=2)
 
@@ -554,6 +566,8 @@ async def add_row(params: AddRowInput) -> str:
     Add one or more new rows to the next empty row(s).
     Each object's keys are column references (header names or letters based on mode).
     Always appends — does not accept row numbers.
+
+    Uses batch update for efficiency - all cells updated in a single API call.
     """
     try:
         ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
@@ -562,17 +576,17 @@ async def add_row(params: AddRowInput) -> str:
         next_row = len(all_data) + 1
 
         added = []
+        cell_updates = {}  # Collect all updates for single batch call
+
         for row_obj in params.rows:
-            cell_updates = {}
             for key, value in row_obj.items():
                 letter = _resolve_column(ws, key, params.mode)
                 cell_updates[f"{letter}{next_row}"] = value
 
-            for cell_ref, value in cell_updates.items():
-                ws.update(cell_ref, [[value]], value_input_option='USER_ENTERED')
-
             added.append({"row": next_row})
             next_row += 1
+
+        _batch_update_cells(ws, cell_updates)
 
         return json.dumps({"success": True, "added": added}, indent=2)
 
@@ -749,6 +763,120 @@ async def delete_worksheet(spreadsheet_id: str, worksheet_name: str) -> str:
         spreadsheet.del_worksheet(ws)
 
         return json.dumps({"success": True, "deleted_worksheet": worksheet_name}, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# --- list_worksheets ---
+
+@mcp.tool(name="list_worksheets")
+async def list_worksheets(spreadsheet_id: str) -> str:
+    """List all worksheets (tabs) in a spreadsheet with their properties."""
+    try:
+        sheets_client = auth.get_sheets_client()
+        spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+
+        worksheets = []
+        for ws in spreadsheet.worksheets():
+            worksheets.append({
+                "title": ws.title,
+                "id": ws.id,
+                "index": ws.index,
+                "row_count": ws.row_count,
+                "col_count": ws.col_count
+            })
+
+        return json.dumps({
+            "success": True,
+            "spreadsheet_id": spreadsheet_id,
+            "worksheets": worksheets,
+            "count": len(worksheets)
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# --- rename_worksheet ---
+
+@mcp.tool(name="rename_worksheet")
+async def rename_worksheet(spreadsheet_id: str, current_name: str, new_name: str) -> str:
+    """Rename a worksheet (tab) in a spreadsheet."""
+    try:
+        sheets_client = auth.get_sheets_client()
+        spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+        ws = spreadsheet.worksheet(current_name)
+        ws.update_title(new_name)
+
+        return json.dumps({
+            "success": True,
+            "old_name": current_name,
+            "new_name": new_name
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# --- get_spreadsheet_info ---
+
+@mcp.tool(name="get_spreadsheet_info")
+async def get_spreadsheet_info(spreadsheet_id: str) -> str:
+    """Get metadata about a spreadsheet including title, URL, and all worksheets."""
+    try:
+        sheets_client = auth.get_sheets_client()
+        spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+
+        worksheets = []
+        for ws in spreadsheet.worksheets():
+            worksheets.append({
+                "title": ws.title,
+                "id": ws.id,
+                "index": ws.index,
+                "row_count": ws.row_count,
+                "col_count": ws.col_count
+            })
+
+        return json.dumps({
+            "success": True,
+            "spreadsheet_id": spreadsheet.id,
+            "title": spreadsheet.title,
+            "url": spreadsheet.url,
+            "worksheets": worksheets,
+            "worksheet_count": len(worksheets)
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# --- clear_range ---
+
+class ClearRangeInput(BaseModel):
+    """Input for clearing a range of cells."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    range: str = Field(..., min_length=1, description="A1 notation range, e.g. 'A2:D10' or 'B:B' for entire column")
+
+@mcp.tool(name="clear_range")
+async def clear_range(params: ClearRangeInput) -> str:
+    """
+    Clear cell contents in a range without deleting rows/columns.
+    Removes values but preserves formatting. Use A1 notation for the range.
+
+    Examples: 'A2:D10', 'B:B' (entire column), '2:5' (entire rows 2-5)
+    """
+    try:
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+        ws.batch_clear([params.range])
+
+        return json.dumps({
+            "success": True,
+            "cleared_range": params.range
+        }, indent=2)
 
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
