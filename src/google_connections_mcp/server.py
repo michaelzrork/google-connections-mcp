@@ -2810,6 +2810,10 @@ async def get_doc_structure(document_id: str) -> str:
         structure = []
         if 'body' in doc and 'content' in doc['body']:
             for element in doc['body']['content']:
+                # Skip elements without indices (like the root structural element)
+                if 'startIndex' not in element:
+                    continue
+
                 if 'paragraph' in element:
                     para = element['paragraph']
                     text = ""
@@ -2819,24 +2823,24 @@ async def get_doc_structure(document_id: str) -> str:
 
                     structure.append({
                         'type': 'paragraph',
-                        'startIndex': element['startIndex'],
-                        'endIndex': element['endIndex'],
+                        'startIndex': element.get('startIndex'),
+                        'endIndex': element.get('endIndex'),
                         'text': text,
                         'style': para.get('paragraphStyle', {}).get('namedStyleType', 'NORMAL_TEXT')
                     })
                 elif 'table' in element:
                     structure.append({
                         'type': 'table',
-                        'startIndex': element['startIndex'],
-                        'endIndex': element['endIndex'],
+                        'startIndex': element.get('startIndex'),
+                        'endIndex': element.get('endIndex'),
                         'rows': element['table'].get('rows', 0),
                         'columns': element['table'].get('columns', 0)
                     })
                 elif 'sectionBreak' in element:
                     structure.append({
                         'type': 'section_break',
-                        'startIndex': element['startIndex'],
-                        'endIndex': element['endIndex']
+                        'startIndex': element.get('startIndex'),
+                        'endIndex': element.get('endIndex')
                     })
 
         return json.dumps({
