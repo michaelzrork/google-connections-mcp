@@ -648,6 +648,49 @@ async def add_row(params: AddRowInput) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
+# --- insert_row ---
+
+class InsertRowInput(BaseModel):
+    """Input for inserting a row."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    row: int = Field(..., ge=1, description="Row number to insert BEFORE (existing rows shift down)")
+    data: Optional[Dict[str, Any]] = Field(default=None, description="Optional data for the new row (keys are column headers or letters)")
+    mode: str = Field(default="header", description="'header' or 'letter' for data keys")
+
+
+@mcp.tool(name="insert_row")
+async def insert_row(params: InsertRowInput) -> str:
+    """
+    Insert a new row at a specific position, shifting existing rows down.
+    Unlike add_row which appends to the end, this inserts and shifts.
+    """
+    try:
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+
+        # Insert the row
+        ws.insert_rows(params.row)
+
+        # Add data if specified
+        if params.data:
+            cell_updates = {}
+            for key, value in params.data.items():
+                letter = _resolve_column(ws, key, params.mode)
+                cell_updates[f"{letter}{params.row}"] = value
+            _batch_update_cells(ws, cell_updates)
+
+        return json.dumps({
+            "success": True,
+            "inserted_at": params.row,
+            "message": f"Row inserted at {params.row}, existing rows shifted down"
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
 # --- delete_row ---
 
 class DeleteRowInput(BaseModel):
@@ -723,6 +766,56 @@ async def add_column(params: AddColumnInput) -> str:
         ws.update(f"{target}1", [[params.header]], value_input_option='USER_ENTERED')
 
         return json.dumps({"success": True, "column": target, "header": params.header}, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# --- insert_column ---
+
+class InsertColumnInput(BaseModel):
+    """Input for inserting a column."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+
+    spreadsheet_id: str = Field(..., min_length=1)
+    worksheet_name: str = Field(..., min_length=1)
+    column: str = Field(..., description="Column letter or header name to insert BEFORE")
+    header: str = Field(default=None, description="Header for the new column (optional)")
+    mode: str = Field(default="letter", description="'header' to find by header name, 'letter' for column letter")
+
+
+@mcp.tool(name="insert_column")
+async def insert_column(params: InsertColumnInput) -> str:
+    """
+    Insert a new column at a specific position, shifting existing columns to the right.
+    Unlike add_column which appends to the end, this inserts and shifts.
+    """
+    try:
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+
+        # Resolve column position
+        if params.mode == "header":
+            headers = ws.row_values(1)
+            if params.column in headers:
+                col_num = headers.index(params.column) + 1
+            else:
+                return json.dumps({"success": False, "error": f"Header '{params.column}' not found"}, indent=2)
+        else:
+            col_num = _col_number(params.column.upper())
+
+        # Insert the column
+        ws.insert_cols(col_num)
+
+        # Add header if specified
+        if params.header:
+            ws.update_cell(1, col_num, params.header)
+
+        return json.dumps({
+            "success": True,
+            "inserted_at": _col_letter(col_num),
+            "header": params.header,
+            "message": f"Column inserted at {_col_letter(col_num)}, existing columns shifted right"
+        }, indent=2)
 
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)

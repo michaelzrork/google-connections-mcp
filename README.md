@@ -144,9 +144,11 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 | `find_row_by_unique_id` | Find row number(s) by searching a column for a value |
 | `update_row` | Update specific cells in existing row(s) by row number or unique ID |
 | `update_cells` | Update cell(s) directly by A1 notation - the core write primitive |
-| `add_row` | Append new row(s) to the sheet |
+| `add_row` | Append new row(s) to the end of the sheet |
+| `insert_row` | Insert row at specific position (shifts existing rows down) |
 | `delete_row` | Delete row(s) by row number or unique ID lookup |
-| `add_column` | Add a new column with a header (auto-detects next empty column) |
+| `add_column` | Add a new column header (appends to next empty column) |
+| `insert_column` | Insert column at specific position (shifts existing columns right) |
 | `delete_column` | Delete a column by header name or letter |
 | `create_spreadsheet` | Create a new Google Sheets document with optional worksheets |
 | `add_worksheet` | Add a new worksheet (tab) to an existing spreadsheet |
