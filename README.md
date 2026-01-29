@@ -9,7 +9,7 @@ A Model Context Protocol (MCP) server that provides AI assistants with access to
 - **Gmail** - Read, send, search, label, archive, and manage messages
 - **Google Tasks** - Full task and task list management
 - **Google Drive** - Search, list folders, create/move/rename/delete/share/copy files, download content
-- **Google Docs** - Create documents, read content, append/insert/replace text, delete content
+- **Google Docs** - Create documents, read/edit content, formatting (bold, italic, fonts, headings, bullets, margins)
 - **Time** - Get current date/time in any IANA timezone
 
 ## How It Works
@@ -247,8 +247,17 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 | `insert_text` | Insert text at a specific index position |
 | `replace_text` | Find and replace all occurrences of text |
 | `delete_doc_content` | Delete a range of content by start/end index |
+| `delete_empty_lines` | Remove excessive empty lines/paragraphs (configurable threshold) |
+| `format_text` | Apply text formatting: bold, italic, underline, strikethrough, font size, font family, colors |
+| `format_paragraph` | Apply paragraph formatting: alignment, line spacing, space above/below, indentation |
+| `create_bullets` | Add bullet or numbered list formatting to paragraphs |
+| `remove_bullets` | Remove bullet/list formatting from paragraphs |
+| `set_heading` | Apply heading styles (Heading 1-6 or normal text) |
+| `set_document_margins` | Set page margins (top, bottom, left, right in inches) |
 
-**Index positions**: Google Docs uses 1-based indexing. Use `get_doc` to see the document structure and determine index positions for insertions and deletions.
+**Index positions**: Google Docs uses 1-based indexing. Use `get_doc` to see the document structure and determine index positions for insertions, deletions, and formatting.
+
+**Bullet presets**: `BULLET_DISC_CIRCLE_SQUARE` (default), `BULLET_CHECKBOX`, `NUMBERED_DECIMAL_ALPHA_ROMAN`, `NUMBERED_DECIMAL_NESTED`, and more.
 
 ### Utility
 

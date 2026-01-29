@@ -2194,6 +2194,420 @@ async def delete_doc_content(document_id: str, start_index: int, end_index: int)
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
+@mcp.tool(name="delete_empty_lines")
+async def delete_empty_lines(document_id: str, max_consecutive: int = 1) -> str:
+    """
+    Find and delete excessive empty lines/paragraphs from a Google Doc.
+
+    Args:
+        document_id: The document ID
+        max_consecutive: Maximum consecutive empty lines to keep (default 1, set to 0 to remove all)
+    """
+    try:
+        docs_service = auth.get_docs_service()
+        doc = docs_service.documents().get(documentId=document_id).execute()
+
+        # Find empty paragraphs (paragraphs with only whitespace/newlines)
+        empty_ranges = []
+        consecutive_empty = 0
+
+        for element in doc['body']['content']:
+            if 'paragraph' in element:
+                para = element['paragraph']
+                text = ""
+                for para_element in para.get('elements', []):
+                    if 'textRun' in para_element:
+                        text += para_element['textRun'].get('content', '')
+
+                # Check if paragraph is empty (only whitespace)
+                if text.strip() == '' and text:
+                    consecutive_empty += 1
+                    if consecutive_empty > max_consecutive:
+                        empty_ranges.append({
+                            'startIndex': element['startIndex'],
+                            'endIndex': element['endIndex']
+                        })
+                else:
+                    consecutive_empty = 0
+
+        if not empty_ranges:
+            return json.dumps({
+                "success": True,
+                "document_id": document_id,
+                "message": "No excess empty lines found",
+                "deleted_count": 0
+            }, indent=2)
+
+        # Delete in reverse order to preserve indices
+        requests = []
+        for range_info in reversed(empty_ranges):
+            requests.append({
+                'deleteContentRange': {
+                    'range': {
+                        'startIndex': range_info['startIndex'],
+                        'endIndex': range_info['endIndex']
+                    }
+                }
+            })
+
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "deleted_count": len(empty_ranges)
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="format_text")
+async def format_text(
+    document_id: str,
+    start_index: int,
+    end_index: int,
+    bold: bool = None,
+    italic: bool = None,
+    underline: bool = None,
+    strikethrough: bool = None,
+    font_size: int = None,
+    font_family: str = None,
+    foreground_color: str = None,
+    background_color: str = None
+) -> str:
+    """
+    Apply text formatting to a range in a Google Doc.
+
+    Args:
+        document_id: The document ID
+        start_index: Start position (1-based)
+        end_index: End position (exclusive)
+        bold: Set bold (True/False)
+        italic: Set italic (True/False)
+        underline: Set underline (True/False)
+        strikethrough: Set strikethrough (True/False)
+        font_size: Font size in points (e.g., 12, 14, 18)
+        font_family: Font name (e.g., 'Arial', 'Times New Roman')
+        foreground_color: Text color as hex (e.g., '#FF0000' for red)
+        background_color: Highlight color as hex
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        text_style = {}
+        fields = []
+
+        if bold is not None:
+            text_style['bold'] = bold
+            fields.append('bold')
+        if italic is not None:
+            text_style['italic'] = italic
+            fields.append('italic')
+        if underline is not None:
+            text_style['underline'] = underline
+            fields.append('underline')
+        if strikethrough is not None:
+            text_style['strikethrough'] = strikethrough
+            fields.append('strikethrough')
+        if font_size is not None:
+            text_style['fontSize'] = {'magnitude': font_size, 'unit': 'PT'}
+            fields.append('fontSize')
+        if font_family is not None:
+            text_style['weightedFontFamily'] = {'fontFamily': font_family}
+            fields.append('weightedFontFamily')
+        if foreground_color is not None:
+            # Parse hex color
+            hex_color = foreground_color.lstrip('#')
+            r, g, b = tuple(int(hex_color[i:i+2], 16) / 255 for i in (0, 2, 4))
+            text_style['foregroundColor'] = {'color': {'rgbColor': {'red': r, 'green': g, 'blue': b}}}
+            fields.append('foregroundColor')
+        if background_color is not None:
+            hex_color = background_color.lstrip('#')
+            r, g, b = tuple(int(hex_color[i:i+2], 16) / 255 for i in (0, 2, 4))
+            text_style['backgroundColor'] = {'color': {'rgbColor': {'red': r, 'green': g, 'blue': b}}}
+            fields.append('backgroundColor')
+
+        if not fields:
+            return json.dumps({"success": False, "error": "No formatting options specified"}, indent=2)
+
+        requests = [{
+            'updateTextStyle': {
+                'range': {'startIndex': start_index, 'endIndex': end_index},
+                'textStyle': text_style,
+                'fields': ','.join(fields)
+            }
+        }]
+
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "formatted_range": {"start": start_index, "end": end_index},
+            "applied_styles": fields
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="format_paragraph")
+async def format_paragraph(
+    document_id: str,
+    start_index: int,
+    end_index: int,
+    alignment: str = None,
+    line_spacing: float = None,
+    space_above: float = None,
+    space_below: float = None,
+    indent_first_line: float = None,
+    indent_start: float = None,
+    indent_end: float = None
+) -> str:
+    """
+    Apply paragraph formatting to a range in a Google Doc.
+
+    Args:
+        document_id: The document ID
+        start_index: Start position (1-based)
+        end_index: End position (exclusive)
+        alignment: Text alignment ('START', 'CENTER', 'END', 'JUSTIFIED')
+        line_spacing: Line spacing multiplier (1.0 = single, 1.5, 2.0 = double)
+        space_above: Space before paragraph in points
+        space_below: Space after paragraph in points
+        indent_first_line: First line indent in points
+        indent_start: Left indent in points
+        indent_end: Right indent in points
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        paragraph_style = {}
+        fields = []
+
+        if alignment is not None:
+            paragraph_style['alignment'] = alignment.upper()
+            fields.append('alignment')
+        if line_spacing is not None:
+            paragraph_style['lineSpacing'] = line_spacing * 100  # API expects percentage
+            fields.append('lineSpacing')
+        if space_above is not None:
+            paragraph_style['spaceAbove'] = {'magnitude': space_above, 'unit': 'PT'}
+            fields.append('spaceAbove')
+        if space_below is not None:
+            paragraph_style['spaceBelow'] = {'magnitude': space_below, 'unit': 'PT'}
+            fields.append('spaceBelow')
+        if indent_first_line is not None:
+            paragraph_style['indentFirstLine'] = {'magnitude': indent_first_line, 'unit': 'PT'}
+            fields.append('indentFirstLine')
+        if indent_start is not None:
+            paragraph_style['indentStart'] = {'magnitude': indent_start, 'unit': 'PT'}
+            fields.append('indentStart')
+        if indent_end is not None:
+            paragraph_style['indentEnd'] = {'magnitude': indent_end, 'unit': 'PT'}
+            fields.append('indentEnd')
+
+        if not fields:
+            return json.dumps({"success": False, "error": "No formatting options specified"}, indent=2)
+
+        requests = [{
+            'updateParagraphStyle': {
+                'range': {'startIndex': start_index, 'endIndex': end_index},
+                'paragraphStyle': paragraph_style,
+                'fields': ','.join(fields)
+            }
+        }]
+
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "formatted_range": {"start": start_index, "end": end_index},
+            "applied_styles": fields
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="create_bullets")
+async def create_bullets(
+    document_id: str,
+    start_index: int,
+    end_index: int,
+    bullet_preset: str = "BULLET_DISC_CIRCLE_SQUARE"
+) -> str:
+    """
+    Apply bullet or numbered list formatting to paragraphs.
+
+    Args:
+        document_id: The document ID
+        start_index: Start position (1-based)
+        end_index: End position (exclusive)
+        bullet_preset: Bullet style preset. Options:
+            - 'BULLET_DISC_CIRCLE_SQUARE' (default bullets)
+            - 'BULLET_DIAMONDX_ARROW3D_SQUARE'
+            - 'BULLET_CHECKBOX'
+            - 'NUMBERED_DECIMAL_ALPHA_ROMAN'
+            - 'NUMBERED_DECIMAL_NESTED'
+            - 'NUMBERED_UPPERALPHA_ALPHA_ROMAN'
+            - 'NUMBERED_UPPERROMAN_UPPERALPHA_DECIMAL'
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        requests = [{
+            'createParagraphBullets': {
+                'range': {'startIndex': start_index, 'endIndex': end_index},
+                'bulletPreset': bullet_preset
+            }
+        }]
+
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "bullet_range": {"start": start_index, "end": end_index},
+            "bullet_preset": bullet_preset
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="remove_bullets")
+async def remove_bullets(document_id: str, start_index: int, end_index: int) -> str:
+    """
+    Remove bullet or numbered list formatting from paragraphs.
+
+    Args:
+        document_id: The document ID
+        start_index: Start position (1-based)
+        end_index: End position (exclusive)
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        requests = [{
+            'deleteParagraphBullets': {
+                'range': {'startIndex': start_index, 'endIndex': end_index}
+            }
+        }]
+
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "removed_from_range": {"start": start_index, "end": end_index}
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="set_heading")
+async def set_heading(
+    document_id: str,
+    start_index: int,
+    end_index: int,
+    heading_level: int
+) -> str:
+    """
+    Apply a heading style to paragraphs.
+
+    Args:
+        document_id: The document ID
+        start_index: Start position (1-based)
+        end_index: End position (exclusive)
+        heading_level: 0 for normal text, 1-6 for Heading 1 through Heading 6
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        if heading_level == 0:
+            named_style = 'NORMAL_TEXT'
+        elif 1 <= heading_level <= 6:
+            named_style = f'HEADING_{heading_level}'
+        else:
+            return json.dumps({"success": False, "error": "heading_level must be 0-6"}, indent=2)
+
+        requests = [{
+            'updateParagraphStyle': {
+                'range': {'startIndex': start_index, 'endIndex': end_index},
+                'paragraphStyle': {'namedStyleType': named_style},
+                'fields': 'namedStyleType'
+            }
+        }]
+
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "heading_range": {"start": start_index, "end": end_index},
+            "style": named_style
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="set_document_margins")
+async def set_document_margins(
+    document_id: str,
+    top: float = None,
+    bottom: float = None,
+    left: float = None,
+    right: float = None
+) -> str:
+    """
+    Set page margins for the entire document.
+
+    Args:
+        document_id: The document ID
+        top: Top margin in inches
+        bottom: Bottom margin in inches
+        left: Left margin in inches
+        right: Right margin in inches
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        document_style = {}
+        fields = []
+
+        if top is not None:
+            document_style['marginTop'] = {'magnitude': top * 72, 'unit': 'PT'}  # 72 points per inch
+            fields.append('marginTop')
+        if bottom is not None:
+            document_style['marginBottom'] = {'magnitude': bottom * 72, 'unit': 'PT'}
+            fields.append('marginBottom')
+        if left is not None:
+            document_style['marginLeft'] = {'magnitude': left * 72, 'unit': 'PT'}
+            fields.append('marginLeft')
+        if right is not None:
+            document_style['marginRight'] = {'magnitude': right * 72, 'unit': 'PT'}
+            fields.append('marginRight')
+
+        if not fields:
+            return json.dumps({"success": False, "error": "No margin values specified"}, indent=2)
+
+        requests = [{
+            'updateDocumentStyle': {
+                'documentStyle': document_style,
+                'fields': ','.join(fields)
+            }
+        }]
+
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "updated_margins": fields
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
 # ============================================================================
 # OAUTH WEB ENDPOINTS
 # ============================================================================
