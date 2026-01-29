@@ -1390,6 +1390,104 @@ async def delete_calendar_event(calendar_id: str, event_id: str) -> str:
 
 
 # ============================================================================
+# GMAIL HELPERS
+# ============================================================================
+
+def _parse_email_address(raw_address: str) -> dict:
+    """Parse email address into name and email components."""
+    import re
+    if not raw_address:
+        return {"name": "", "email": ""}
+
+    # Match "Name <email@domain.com>" or just "email@domain.com"
+    match = re.match(r'^(?:"?([^"<]*)"?\s*)?<?([^>]+@[^>]+)>?$', raw_address.strip())
+    if match:
+        name = (match.group(1) or "").strip()
+        email = match.group(2).strip()
+        return {"name": name, "email": email}
+    return {"name": "", "email": raw_address.strip()}
+
+
+def _format_email_address(raw_address: str) -> str:
+    """Format email address nicely: 'Name <email>' or just 'email'."""
+    parsed = _parse_email_address(raw_address)
+    if parsed["name"]:
+        return f"{parsed['name']} <{parsed['email']}>"
+    return parsed["email"]
+
+
+def _extract_text_from_message(payload: dict) -> str:
+    """Extract plain text content from Gmail message payload, stripping HTML."""
+    import base64
+    import re
+
+    text_parts = []
+
+    def process_part(part):
+        mime_type = part.get('mimeType', '')
+        body = part.get('body', {})
+
+        # If this part has data, process it
+        if body.get('data'):
+            decoded = base64.urlsafe_b64decode(body['data']).decode('utf-8', errors='ignore')
+
+            if mime_type == 'text/plain':
+                text_parts.append(decoded)
+            elif mime_type == 'text/html' and not text_parts:
+                # Only use HTML if we don't have plain text
+                # Strip HTML tags
+                clean = re.sub(r'<style[^>]*>.*?</style>', '', decoded, flags=re.DOTALL | re.IGNORECASE)
+                clean = re.sub(r'<script[^>]*>.*?</script>', '', clean, flags=re.DOTALL | re.IGNORECASE)
+                clean = re.sub(r'<[^>]+>', ' ', clean)
+                clean = re.sub(r'&nbsp;', ' ', clean)
+                clean = re.sub(r'&amp;', '&', clean)
+                clean = re.sub(r'&lt;', '<', clean)
+                clean = re.sub(r'&gt;', '>', clean)
+                clean = re.sub(r'&quot;', '"', clean)
+                clean = re.sub(r'&#39;', "'", clean)
+                clean = re.sub(r'\s+', ' ', clean)
+                text_parts.append(clean.strip())
+
+        # Process nested parts
+        for sub_part in part.get('parts', []):
+            process_part(sub_part)
+
+    process_part(payload)
+    return '\n\n'.join(text_parts).strip()
+
+
+def _parse_date(date_str: str) -> str:
+    """Parse email date into a cleaner format."""
+    from email.utils import parsedate_to_datetime
+    try:
+        dt = parsedate_to_datetime(date_str)
+        return dt.strftime('%Y-%m-%d %H:%M')
+    except:
+        return date_str
+
+
+def _get_attachment_info(payload: dict) -> list:
+    """Extract attachment information from message payload."""
+    attachments = []
+
+    def process_part(part):
+        filename = part.get('filename', '')
+        if filename:
+            body = part.get('body', {})
+            attachments.append({
+                'filename': filename,
+                'mimeType': part.get('mimeType', ''),
+                'size': body.get('size', 0),
+                'attachmentId': body.get('attachmentId', '')
+            })
+        for sub_part in part.get('parts', []):
+            process_part(sub_part)
+
+    process_part(payload)
+    return attachments
+
+
+# ============================================================================
 # GMAIL TOOLS
 # ============================================================================
 
@@ -1397,29 +1495,39 @@ async def delete_calendar_event(calendar_id: str, event_id: str) -> str:
 async def list_gmail_messages(
     query: str = None,
     max_results: int = 10,
-    page_token: str = None
+    page_token: str = None,
+    include_labels: bool = False
 ) -> str:
     """
-    List Gmail messages with optional search query.
-    
+    List Gmail messages with optional search query. Returns clean, summarized results.
+
     Query examples:
     - "from:example@gmail.com"
     - "subject:meeting"
     - "is:unread"
-    - "after:2025/10/01"
+    - "has:attachment"
+    - "after:2025/01/01 before:2025/02/01"
+    - "in:inbox is:unread"
+
+    Args:
+        query: Gmail search query (uses Gmail's search syntax)
+        max_results: Maximum messages to return (default 10, max 100)
+        page_token: Token for pagination (from previous response)
+        include_labels: Include label IDs in response (default False)
     """
     try:
         service = auth.get_gmail_service()
-        
+        max_results = min(max_results, 100)  # Cap at 100
+
         result = service.users().messages().list(
             userId='me',
             q=query,
             maxResults=max_results,
             pageToken=page_token
         ).execute()
-        
+
         messages = result.get('messages', [])
-        
+
         detailed_messages = []
         for msg in messages[:max_results]:
             msg_detail = service.users().messages().get(
@@ -1428,41 +1536,89 @@ async def list_gmail_messages(
                 format='metadata',
                 metadataHeaders=['From', 'To', 'Subject', 'Date']
             ).execute()
-            
+
             headers = {h['name']: h['value'] for h in msg_detail.get('payload', {}).get('headers', [])}
-            
-            detailed_messages.append({
+
+            message_data = {
                 'id': msg_detail['id'],
                 'threadId': msg_detail['threadId'],
-                'from': headers.get('From', ''),
-                'to': headers.get('To', ''),
+                'from': _format_email_address(headers.get('From', '')),
+                'to': _format_email_address(headers.get('To', '')),
                 'subject': headers.get('Subject', ''),
-                'date': headers.get('Date', ''),
+                'date': _parse_date(headers.get('Date', '')),
                 'snippet': msg_detail.get('snippet', '')
-            })
-        
-        return json.dumps({
+            }
+
+            if include_labels:
+                message_data['labels'] = msg_detail.get('labelIds', [])
+
+            detailed_messages.append(message_data)
+
+        response = {
             "success": True,
-            "messages": detailed_messages,
-            "nextPageToken": result.get('nextPageToken')
-        }, indent=2)
+            "count": len(detailed_messages),
+            "messages": detailed_messages
+        }
+        if result.get('nextPageToken'):
+            response["nextPageToken"] = result.get('nextPageToken')
+
+        return json.dumps(response, indent=2)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
 @mcp.tool(name="get_gmail_message")
-async def get_gmail_message(message_id: str) -> str:
-    """Get full content of a Gmail message"""
+async def get_gmail_message(
+    message_id: str,
+    include_attachments: bool = True
+) -> str:
+    """
+    Get full content of a Gmail message with clean text extraction.
+
+    Returns the message with HTML stripped and only essential fields.
+
+    Args:
+        message_id: The Gmail message ID
+        include_attachments: Include attachment metadata (default True)
+    """
     try:
         service = auth.get_gmail_service()
-        
+
         msg = service.users().messages().get(
             userId='me',
             id=message_id,
             format='full'
         ).execute()
-        
-        return json.dumps({"success": True, "message": msg}, indent=2)
+
+        payload = msg.get('payload', {})
+        headers = {h['name']: h['value'] for h in payload.get('headers', [])}
+
+        # Extract clean text content
+        body_text = _extract_text_from_message(payload)
+
+        # Build clean response
+        response_data = {
+            'id': msg['id'],
+            'threadId': msg['threadId'],
+            'from': _format_email_address(headers.get('From', '')),
+            'to': _format_email_address(headers.get('To', '')),
+            'cc': _format_email_address(headers.get('Cc', '')) if headers.get('Cc') else None,
+            'subject': headers.get('Subject', ''),
+            'date': _parse_date(headers.get('Date', '')),
+            'body': body_text,
+            'labels': msg.get('labelIds', [])
+        }
+
+        # Add attachment info if requested
+        if include_attachments:
+            attachments = _get_attachment_info(payload)
+            if attachments:
+                response_data['attachments'] = attachments
+
+        # Remove None values
+        response_data = {k: v for k, v in response_data.items() if v is not None}
+
+        return json.dumps({"success": True, "message": response_data}, indent=2)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
@@ -1500,6 +1656,306 @@ async def send_gmail_message(
         return json.dumps({
             "success": True,
             "message_id": sent_message['id']
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="get_gmail_thread")
+async def get_gmail_thread(thread_id: str, max_messages: int = 20) -> str:
+    """
+    Get all messages in a Gmail thread (conversation).
+
+    Returns messages in chronological order with clean text content.
+
+    Args:
+        thread_id: The Gmail thread ID
+        max_messages: Maximum messages to return from the thread (default 20)
+    """
+    try:
+        service = auth.get_gmail_service()
+
+        thread = service.users().threads().get(
+            userId='me',
+            id=thread_id,
+            format='full'
+        ).execute()
+
+        messages = []
+        for msg in thread.get('messages', [])[:max_messages]:
+            payload = msg.get('payload', {})
+            headers = {h['name']: h['value'] for h in payload.get('headers', [])}
+
+            messages.append({
+                'id': msg['id'],
+                'from': _format_email_address(headers.get('From', '')),
+                'to': _format_email_address(headers.get('To', '')),
+                'subject': headers.get('Subject', ''),
+                'date': _parse_date(headers.get('Date', '')),
+                'body': _extract_text_from_message(payload)
+            })
+
+        return json.dumps({
+            "success": True,
+            "threadId": thread_id,
+            "messageCount": len(messages),
+            "messages": messages
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="get_gmail_attachment")
+async def get_gmail_attachment(message_id: str, attachment_id: str) -> str:
+    """
+    Get attachment data from a Gmail message.
+
+    Returns the attachment as base64 encoded data.
+
+    Args:
+        message_id: The Gmail message ID
+        attachment_id: The attachment ID (from get_gmail_message response)
+    """
+    try:
+        service = auth.get_gmail_service()
+
+        attachment = service.users().messages().attachments().get(
+            userId='me',
+            messageId=message_id,
+            id=attachment_id
+        ).execute()
+
+        return json.dumps({
+            "success": True,
+            "size": attachment.get('size', 0),
+            "data": attachment.get('data', '')  # Base64 encoded
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="reply_to_gmail")
+async def reply_to_gmail(
+    message_id: str,
+    body: str,
+    reply_all: bool = False
+) -> str:
+    """
+    Reply to a Gmail message.
+
+    Creates a reply with proper threading and quoting.
+
+    Args:
+        message_id: The message ID to reply to
+        body: The reply body text
+        reply_all: If True, reply to all recipients (default False)
+    """
+    try:
+        import base64
+        from email.mime.text import MIMEText
+
+        service = auth.get_gmail_service()
+
+        # Get original message for threading info
+        original = service.users().messages().get(
+            userId='me',
+            id=message_id,
+            format='metadata',
+            metadataHeaders=['From', 'To', 'Cc', 'Subject', 'Message-ID', 'References']
+        ).execute()
+
+        headers = {h['name']: h['value'] for h in original.get('payload', {}).get('headers', [])}
+        thread_id = original['threadId']
+
+        # Determine recipients
+        original_from = headers.get('From', '')
+        to_address = _parse_email_address(original_from)['email']
+
+        # Build reply
+        message = MIMEText(body)
+        message['to'] = to_address
+
+        if reply_all:
+            # Add original To and Cc (excluding self)
+            original_to = headers.get('To', '')
+            original_cc = headers.get('Cc', '')
+            cc_addresses = []
+            if original_to:
+                cc_addresses.append(original_to)
+            if original_cc:
+                cc_addresses.append(original_cc)
+            if cc_addresses:
+                message['cc'] = ', '.join(cc_addresses)
+
+        # Set subject with Re: prefix
+        subject = headers.get('Subject', '')
+        if not subject.lower().startswith('re:'):
+            subject = f"Re: {subject}"
+        message['subject'] = subject
+
+        # Set threading headers
+        message_id_header = headers.get('Message-ID', '')
+        references = headers.get('References', '')
+        if message_id_header:
+            message['In-Reply-To'] = message_id_header
+            if references:
+                message['References'] = f"{references} {message_id_header}"
+            else:
+                message['References'] = message_id_header
+
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+
+        sent_message = service.users().messages().send(
+            userId='me',
+            body={'raw': raw, 'threadId': thread_id}
+        ).execute()
+
+        return json.dumps({
+            "success": True,
+            "message_id": sent_message['id'],
+            "threadId": thread_id
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="forward_gmail")
+async def forward_gmail(
+    message_id: str,
+    to: str,
+    additional_message: str = None
+) -> str:
+    """
+    Forward a Gmail message to another recipient.
+
+    Args:
+        message_id: The message ID to forward
+        to: Email address to forward to
+        additional_message: Optional message to include above the forwarded content
+    """
+    try:
+        import base64
+        from email.mime.text import MIMEText
+
+        service = auth.get_gmail_service()
+
+        # Get original message
+        original = service.users().messages().get(
+            userId='me',
+            id=message_id,
+            format='full'
+        ).execute()
+
+        payload = original.get('payload', {})
+        headers = {h['name']: h['value'] for h in payload.get('headers', [])}
+
+        # Get original content
+        original_body = _extract_text_from_message(payload)
+        original_from = headers.get('From', '')
+        original_date = headers.get('Date', '')
+        original_subject = headers.get('Subject', '')
+
+        # Build forwarded message body
+        forward_header = f"\n\n---------- Forwarded message ----------\nFrom: {original_from}\nDate: {original_date}\nSubject: {original_subject}\n\n"
+        if additional_message:
+            body = f"{additional_message}{forward_header}{original_body}"
+        else:
+            body = f"{forward_header}{original_body}"
+
+        # Build message
+        message = MIMEText(body)
+        message['to'] = to
+        message['subject'] = f"Fwd: {original_subject}" if not original_subject.lower().startswith('fwd:') else original_subject
+
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+
+        sent_message = service.users().messages().send(
+            userId='me',
+            body={'raw': raw}
+        ).execute()
+
+        return json.dumps({
+            "success": True,
+            "message_id": sent_message['id']
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="count_gmail_messages")
+async def count_gmail_messages(query: str = None) -> str:
+    """
+    Count Gmail messages matching a query.
+
+    Useful for getting quick statistics without fetching all messages.
+
+    Query examples:
+    - "is:unread" - count unread messages
+    - "in:inbox" - count inbox messages
+    - "from:example@gmail.com" - count from specific sender
+    - "after:2025/01/01" - count messages after date
+    - "has:attachment" - count messages with attachments
+
+    Args:
+        query: Gmail search query (optional, counts all messages if not provided)
+    """
+    try:
+        service = auth.get_gmail_service()
+
+        # Use estimate for total count
+        count = 0
+        page_token = None
+
+        # Fetch message IDs in batches to count
+        while True:
+            result = service.users().messages().list(
+                userId='me',
+                q=query,
+                maxResults=500,  # Max allowed
+                pageToken=page_token
+            ).execute()
+
+            messages = result.get('messages', [])
+            count += len(messages)
+
+            page_token = result.get('nextPageToken')
+            if not page_token or count >= 10000:  # Cap at 10k to avoid long waits
+                break
+
+        response = {
+            "success": True,
+            "count": count
+        }
+
+        if query:
+            response["query"] = query
+
+        if count >= 10000:
+            response["note"] = "Count capped at 10000. Actual count may be higher."
+
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="get_gmail_profile")
+async def get_gmail_profile() -> str:
+    """
+    Get the authenticated user's Gmail profile information.
+
+    Returns email address, total messages, threads, and history ID.
+    """
+    try:
+        service = auth.get_gmail_service()
+
+        profile = service.users().getProfile(userId='me').execute()
+
+        return json.dumps({
+            "success": True,
+            "email": profile.get('emailAddress'),
+            "messagesTotal": profile.get('messagesTotal'),
+            "threadsTotal": profile.get('threadsTotal'),
+            "historyId": profile.get('historyId')
         }, indent=2)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
