@@ -2000,6 +2000,201 @@ async def download_drive_file(file_id: str) -> str:
 
 
 # ============================================================================
+# GOOGLE DOCS TOOLS
+# ============================================================================
+
+@mcp.tool(name="create_doc")
+async def create_doc(title: str, content: str = None, folder_id: str = None) -> str:
+    """
+    Create a new Google Doc.
+
+    Args:
+        title: Document title
+        content: Optional initial text content
+        folder_id: Optional folder ID to create the doc in
+    """
+    try:
+        docs_service = auth.get_docs_service()
+        drive_service = auth.get_drive_service()
+
+        # Create the document
+        doc = docs_service.documents().create(body={'title': title}).execute()
+        doc_id = doc.get('documentId')
+
+        # Add initial content if provided
+        if content:
+            requests = [{'insertText': {'location': {'index': 1}, 'text': content}}]
+            docs_service.documents().batchUpdate(documentId=doc_id, body={'requests': requests}).execute()
+
+        # Move to folder if specified
+        if folder_id:
+            file = drive_service.files().get(fileId=doc_id, fields='parents').execute()
+            previous_parents = ",".join(file.get('parents', []))
+            drive_service.files().update(fileId=doc_id, addParents=folder_id,
+                removeParents=previous_parents, fields='id, parents').execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": doc_id,
+            "title": title,
+            "url": f"https://docs.google.com/document/d/{doc_id}/edit"
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="get_doc")
+async def get_doc(document_id: str) -> str:
+    """
+    Get the content and structure of a Google Doc.
+
+    Returns the document title and full text content.
+    """
+    try:
+        docs_service = auth.get_docs_service()
+        doc = docs_service.documents().get(documentId=document_id).execute()
+
+        # Extract text content from the document body
+        content = ""
+        if 'body' in doc and 'content' in doc['body']:
+            for element in doc['body']['content']:
+                if 'paragraph' in element:
+                    for para_element in element['paragraph'].get('elements', []):
+                        if 'textRun' in para_element:
+                            content += para_element['textRun'].get('content', '')
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "title": doc.get('title', ''),
+            "content": content,
+            "url": f"https://docs.google.com/document/d/{document_id}/edit"
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="append_to_doc")
+async def append_to_doc(document_id: str, text: str) -> str:
+    """
+    Append text to the end of a Google Doc.
+
+    Args:
+        document_id: The document ID
+        text: Text to append (can include newlines)
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        # Get current document to find the end index
+        doc = docs_service.documents().get(documentId=document_id).execute()
+        end_index = doc['body']['content'][-1]['endIndex'] - 1
+
+        # Insert text at the end
+        requests = [{'insertText': {'location': {'index': end_index}, 'text': text}}]
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "appended_length": len(text)
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="insert_text")
+async def insert_text(document_id: str, text: str, index: int) -> str:
+    """
+    Insert text at a specific position in a Google Doc.
+
+    Args:
+        document_id: The document ID
+        text: Text to insert
+        index: Position to insert at (1-based, 1 = beginning of doc)
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        requests = [{'insertText': {'location': {'index': index}, 'text': text}}]
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "inserted_at": index,
+            "inserted_length": len(text)
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="replace_text")
+async def replace_text(document_id: str, find_text: str, replace_with: str, match_case: bool = False) -> str:
+    """
+    Find and replace all occurrences of text in a Google Doc.
+
+    Args:
+        document_id: The document ID
+        find_text: Text to find
+        replace_with: Replacement text
+        match_case: Whether to match case (default: False)
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        requests = [{
+            'replaceAllText': {
+                'containsText': {'text': find_text, 'matchCase': match_case},
+                'replaceText': replace_with
+            }
+        }]
+        result = docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        # Get the number of replacements made
+        occurrences = 0
+        if 'replies' in result:
+            for reply in result['replies']:
+                if 'replaceAllText' in reply:
+                    occurrences = reply['replaceAllText'].get('occurrencesChanged', 0)
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "find_text": find_text,
+            "replace_with": replace_with,
+            "occurrences_replaced": occurrences
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="delete_doc_content")
+async def delete_doc_content(document_id: str, start_index: int, end_index: int) -> str:
+    """
+    Delete a range of content from a Google Doc.
+
+    Args:
+        document_id: The document ID
+        start_index: Start position (1-based)
+        end_index: End position (exclusive)
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        requests = [{'deleteContentRange': {'range': {'startIndex': start_index, 'endIndex': end_index}}}]
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "deleted_range": {"start": start_index, "end": end_index}
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# ============================================================================
 # OAUTH WEB ENDPOINTS
 # ============================================================================
 

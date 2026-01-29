@@ -9,6 +9,7 @@ A Model Context Protocol (MCP) server that provides AI assistants with access to
 - **Gmail** - Read, send, search, label, archive, and manage messages
 - **Google Tasks** - Full task and task list management
 - **Google Drive** - Search, list folders, create/move/rename/delete/share/copy files, download content
+- **Google Docs** - Create documents, read content, append/insert/replace text, delete content
 - **Time** - Get current date/time in any IANA timezone
 
 ## How It Works
@@ -235,6 +236,19 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 - `delete_file` moves to trash by default; use `permanent=True` to delete forever
 - `share_file` supports roles: `reader`, `commenter`, `writer`
 - `copy_file` cannot copy folders, only files
+
+### Google Docs
+
+| Tool | Description |
+|------|-------------|
+| `create_doc` | Create a new Google Doc with optional initial content and folder placement |
+| `get_doc` | Get document content as plain text with structure info |
+| `append_to_doc` | Append text to the end of a document |
+| `insert_text` | Insert text at a specific index position |
+| `replace_text` | Find and replace all occurrences of text |
+| `delete_doc_content` | Delete a range of content by start/end index |
+
+**Index positions**: Google Docs uses 1-based indexing. Use `get_doc` to see the document structure and determine index positions for insertions and deletions.
 
 ### Utility
 
