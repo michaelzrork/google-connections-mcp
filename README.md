@@ -155,6 +155,11 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 | `rename_worksheet` | Rename a worksheet |
 | `get_spreadsheet_info` | Get spreadsheet metadata (title, URL, all worksheets) |
 | `clear_range` | Clear cell contents in a range without deleting rows/columns |
+| `sort_worksheet` | Sort entire worksheet by a column |
+| `copy_worksheet` | Copy a worksheet to the same or a different spreadsheet |
+| `merge_cells` | Merge a range of cells into one |
+| `unmerge_cells` | Unmerge previously merged cells |
+| `freeze_rows_columns` | Freeze rows and/or columns (headers stay visible while scrolling) |
 
 **Query Operators**: `==`, `!=`, `>`, `<`, `>=`, `<=`, `in`, `not in`, `contains`, `not contains`, `is_null`, `not_null`
 
@@ -254,8 +259,13 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 | `remove_bullets` | Remove bullet/list formatting from paragraphs |
 | `set_heading` | Apply heading styles (Heading 1-6 or normal text) |
 | `set_document_margins` | Set page margins (top, bottom, left, right in inches) |
+| `get_doc_structure` | Get detailed document structure with index positions for each element |
+| `insert_link` | Add a hyperlink to existing text |
+| `insert_image` | Insert an image from a URL |
+| `insert_table` | Create a table with specified rows and columns |
+| `insert_page_break` | Insert a page break |
 
-**Index positions**: Google Docs uses 1-based indexing. Use `get_doc` to see the document structure and determine index positions for insertions, deletions, and formatting.
+**Index positions**: Google Docs uses 1-based indexing. Use `get_doc_structure` to see each paragraph with its start/end indices for precise formatting.
 
 **Bullet presets**: `BULLET_DISC_CIRCLE_SQUARE` (default), `BULLET_CHECKBOX`, `NUMBERED_DECIMAL_ALPHA_ROMAN`, `NUMBERED_DECIMAL_NESTED`, and more.
 

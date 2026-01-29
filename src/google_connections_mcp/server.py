@@ -936,6 +936,193 @@ async def clear_range(params: ClearRangeInput) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
+class SortWorksheetParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    spreadsheet_id: str = Field(description="The spreadsheet ID from the URL")
+    worksheet_name: str = Field(description="Name of the worksheet/tab")
+    sort_column: str = Field(description="Column to sort by (letter like 'A' or header name)")
+    ascending: bool = Field(default=True, description="Sort ascending (True) or descending (False)")
+    has_header: bool = Field(default=True, description="If True, first row is preserved as header")
+    mode: str = Field(default="header", description="'header' to use column names, 'letter' to use column letters")
+
+
+@mcp.tool(name="sort_worksheet")
+async def sort_worksheet(params: SortWorksheetParams) -> str:
+    """
+    Sort an entire worksheet by a column.
+    The header row (row 1) is preserved if has_header is True.
+    """
+    try:
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+
+        # Resolve column to letter
+        if params.mode == "header":
+            headers = ws.row_values(1)
+            if params.sort_column in headers:
+                col_idx = headers.index(params.sort_column) + 1
+                col_letter = _col_letter(col_idx)
+            else:
+                return json.dumps({"success": False, "error": f"Column '{params.sort_column}' not found in headers"}, indent=2)
+        else:
+            col_letter = params.sort_column.upper()
+
+        col_num = _col_number(col_letter)
+
+        # Use gspread's sort method
+        order = 'asc' if params.ascending else 'des'
+        start_row = 2 if params.has_header else 1
+        ws.sort((col_num, order), range=f"A{start_row}:{_col_letter(ws.col_count)}{ws.row_count}")
+
+        return json.dumps({
+            "success": True,
+            "sorted_by": params.sort_column,
+            "ascending": params.ascending,
+            "header_preserved": params.has_header
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+class CopyWorksheetParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_spreadsheet_id: str = Field(description="Source spreadsheet ID")
+    source_worksheet_name: str = Field(description="Name of the worksheet to copy")
+    destination_spreadsheet_id: str = Field(default=None, description="Destination spreadsheet ID (same spreadsheet if not specified)")
+    new_worksheet_name: str = Field(default=None, description="Name for the copied worksheet (auto-generated if not specified)")
+
+
+@mcp.tool(name="copy_worksheet")
+async def copy_worksheet(params: CopyWorksheetParams) -> str:
+    """
+    Copy a worksheet to the same or a different spreadsheet.
+    """
+    try:
+        sheets_client = auth.get_sheets_client()
+        source_spreadsheet = sheets_client.open_by_key(params.source_spreadsheet_id)
+        source_ws = source_spreadsheet.worksheet(params.source_worksheet_name)
+
+        dest_spreadsheet_id = params.destination_spreadsheet_id or params.source_spreadsheet_id
+
+        if dest_spreadsheet_id == params.source_spreadsheet_id:
+            # Copy within same spreadsheet
+            new_ws = source_spreadsheet.duplicate_sheet(
+                source_ws.id,
+                new_sheet_name=params.new_worksheet_name
+            )
+            return json.dumps({
+                "success": True,
+                "new_worksheet_name": new_ws.title,
+                "new_worksheet_id": new_ws.id,
+                "destination_spreadsheet_id": params.source_spreadsheet_id
+            }, indent=2)
+        else:
+            # Copy to different spreadsheet
+            new_ws = source_ws.copy_to(dest_spreadsheet_id)
+
+            # Rename if specified
+            if params.new_worksheet_name:
+                dest_spreadsheet = sheets_client.open_by_key(dest_spreadsheet_id)
+                # The copy_to returns basic info; we need to get the worksheet and rename
+                copied_ws = dest_spreadsheet.get_worksheet_by_id(new_ws['sheetId'])
+                copied_ws.update_title(params.new_worksheet_name)
+                new_ws_name = params.new_worksheet_name
+            else:
+                new_ws_name = new_ws.get('title', 'Copy of ' + params.source_worksheet_name)
+
+            return json.dumps({
+                "success": True,
+                "new_worksheet_name": new_ws_name,
+                "new_worksheet_id": new_ws['sheetId'],
+                "destination_spreadsheet_id": dest_spreadsheet_id
+            }, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+class MergeCellsParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    spreadsheet_id: str = Field(description="The spreadsheet ID from the URL")
+    worksheet_name: str = Field(description="Name of the worksheet/tab")
+    range: str = Field(description="Range to merge in A1 notation (e.g., 'A1:C1', 'B2:B5')")
+    merge_type: str = Field(default="MERGE_ALL", description="'MERGE_ALL' (single cell), 'MERGE_COLUMNS' (merge within columns), 'MERGE_ROWS' (merge within rows)")
+
+
+@mcp.tool(name="merge_cells")
+async def merge_cells(params: MergeCellsParams) -> str:
+    """
+    Merge a range of cells into one.
+    The value of the top-left cell is preserved.
+    """
+    try:
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+        ws.merge_cells(params.range, merge_type=params.merge_type)
+
+        return json.dumps({
+            "success": True,
+            "merged_range": params.range,
+            "merge_type": params.merge_type
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+class UnmergeCellsParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    spreadsheet_id: str = Field(description="The spreadsheet ID from the URL")
+    worksheet_name: str = Field(description="Name of the worksheet/tab")
+    range: str = Field(description="Range to unmerge in A1 notation (e.g., 'A1:C1')")
+
+
+@mcp.tool(name="unmerge_cells")
+async def unmerge_cells(params: UnmergeCellsParams) -> str:
+    """
+    Unmerge previously merged cells.
+    """
+    try:
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+        ws.unmerge_cells(params.range)
+
+        return json.dumps({
+            "success": True,
+            "unmerged_range": params.range
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+class FreezeParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    spreadsheet_id: str = Field(description="The spreadsheet ID from the URL")
+    worksheet_name: str = Field(description="Name of the worksheet/tab")
+    rows: int = Field(default=0, description="Number of rows to freeze from the top (0 to unfreeze)")
+    cols: int = Field(default=0, description="Number of columns to freeze from the left (0 to unfreeze)")
+
+
+@mcp.tool(name="freeze_rows_columns")
+async def freeze_rows_columns(params: FreezeParams) -> str:
+    """
+    Freeze rows and/or columns in a worksheet.
+    Frozen rows/columns stay visible while scrolling.
+    Set to 0 to unfreeze.
+    """
+    try:
+        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
+        ws.freeze(rows=params.rows, cols=params.cols)
+
+        return json.dumps({
+            "success": True,
+            "frozen_rows": params.rows,
+            "frozen_cols": params.cols
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
 # ============================================================================
 # GOOGLE CALENDAR TOOLS
 # ============================================================================
@@ -2603,6 +2790,226 @@ async def set_document_margins(
             "success": True,
             "document_id": document_id,
             "updated_margins": fields
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="get_doc_structure")
+async def get_doc_structure(document_id: str) -> str:
+    """
+    Get detailed document structure with index positions.
+
+    Returns each paragraph with its start/end indices, making it easy to
+    target specific text for formatting operations.
+    """
+    try:
+        docs_service = auth.get_docs_service()
+        doc = docs_service.documents().get(documentId=document_id).execute()
+
+        structure = []
+        if 'body' in doc and 'content' in doc['body']:
+            for element in doc['body']['content']:
+                if 'paragraph' in element:
+                    para = element['paragraph']
+                    text = ""
+                    for para_element in para.get('elements', []):
+                        if 'textRun' in para_element:
+                            text += para_element['textRun'].get('content', '')
+
+                    structure.append({
+                        'type': 'paragraph',
+                        'startIndex': element['startIndex'],
+                        'endIndex': element['endIndex'],
+                        'text': text,
+                        'style': para.get('paragraphStyle', {}).get('namedStyleType', 'NORMAL_TEXT')
+                    })
+                elif 'table' in element:
+                    structure.append({
+                        'type': 'table',
+                        'startIndex': element['startIndex'],
+                        'endIndex': element['endIndex'],
+                        'rows': element['table'].get('rows', 0),
+                        'columns': element['table'].get('columns', 0)
+                    })
+                elif 'sectionBreak' in element:
+                    structure.append({
+                        'type': 'section_break',
+                        'startIndex': element['startIndex'],
+                        'endIndex': element['endIndex']
+                    })
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "title": doc.get('title', ''),
+            "structure": structure,
+            "url": f"https://docs.google.com/document/d/{document_id}/edit"
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="insert_link")
+async def insert_link(
+    document_id: str,
+    start_index: int,
+    end_index: int,
+    url: str
+) -> str:
+    """
+    Add a hyperlink to existing text in a Google Doc.
+
+    Args:
+        document_id: The document ID
+        start_index: Start position of text to make into link
+        end_index: End position of text to make into link
+        url: The URL the link should point to
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        requests = [{
+            'updateTextStyle': {
+                'range': {'startIndex': start_index, 'endIndex': end_index},
+                'textStyle': {'link': {'url': url}},
+                'fields': 'link'
+            }
+        }]
+
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "linked_range": {"start": start_index, "end": end_index},
+            "url": url
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="insert_image")
+async def insert_image(
+    document_id: str,
+    image_url: str,
+    index: int,
+    width: float = None,
+    height: float = None
+) -> str:
+    """
+    Insert an image into a Google Doc from a URL.
+
+    Args:
+        document_id: The document ID
+        image_url: Public URL of the image to insert
+        index: Position to insert the image (1-based)
+        width: Optional width in points (72 points = 1 inch)
+        height: Optional height in points
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        inline_object = {
+            'uri': image_url
+        }
+
+        # Add size if specified
+        if width or height:
+            size = {}
+            if width:
+                size['width'] = {'magnitude': width, 'unit': 'PT'}
+            if height:
+                size['height'] = {'magnitude': height, 'unit': 'PT'}
+            inline_object['objectSize'] = size
+
+        requests = [{
+            'insertInlineImage': {
+                'location': {'index': index},
+                'uri': image_url,
+                'objectSize': inline_object.get('objectSize', {})
+            }
+        }]
+
+        # Remove empty objectSize if not specified
+        if not inline_object.get('objectSize'):
+            requests[0]['insertInlineImage'].pop('objectSize', None)
+
+        result = docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "inserted_at": index,
+            "image_url": image_url
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="insert_table")
+async def insert_table(
+    document_id: str,
+    index: int,
+    rows: int,
+    columns: int
+) -> str:
+    """
+    Insert a table into a Google Doc.
+
+    Args:
+        document_id: The document ID
+        index: Position to insert the table (1-based)
+        rows: Number of rows
+        columns: Number of columns
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        requests = [{
+            'insertTable': {
+                'location': {'index': index},
+                'rows': rows,
+                'columns': columns
+            }
+        }]
+
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "inserted_at": index,
+            "table_size": {"rows": rows, "columns": columns}
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="insert_page_break")
+async def insert_page_break(document_id: str, index: int) -> str:
+    """
+    Insert a page break into a Google Doc.
+
+    Args:
+        document_id: The document ID
+        index: Position to insert the page break (1-based)
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        requests = [{
+            'insertPageBreak': {
+                'location': {'index': index}
+            }
+        }]
+
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "page_break_at": index
         }, indent=2)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
