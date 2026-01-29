@@ -2889,6 +2889,98 @@ async def insert_link(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
+@mcp.tool(name="link_text")
+async def link_text(
+    document_id: str,
+    find_text: str,
+    url: str,
+    match_case: bool = False,
+    occurrence: int = 1
+) -> str:
+    """
+    Find text in a Google Doc and make it a hyperlink.
+
+    This is easier to use than insert_link because you don't need to calculate indices.
+
+    Args:
+        document_id: The document ID
+        find_text: The exact text to find and link
+        url: The URL the link should point to
+        match_case: Whether to match case exactly (default: False)
+        occurrence: Which occurrence to link if text appears multiple times (1 = first, 2 = second, etc.)
+    """
+    try:
+        docs_service = auth.get_docs_service()
+        doc = docs_service.documents().get(documentId=document_id).execute()
+
+        # Build the full document text with index tracking
+        text_with_indices = []  # List of (char, index) tuples
+        if 'body' in doc and 'content' in doc['body']:
+            for element in doc['body']['content']:
+                if 'paragraph' in element:
+                    for para_element in element['paragraph'].get('elements', []):
+                        if 'textRun' in para_element:
+                            start_idx = para_element.get('startIndex', 0)
+                            text = para_element['textRun'].get('content', '')
+                            for i, char in enumerate(text):
+                                text_with_indices.append((char, start_idx + i))
+
+        # Build full text string for searching
+        full_text = ''.join([t[0] for t in text_with_indices])
+
+        # Search for the text
+        search_text = find_text if match_case else find_text.lower()
+        search_in = full_text if match_case else full_text.lower()
+
+        # Find the nth occurrence
+        start_pos = 0
+        found_count = 0
+        match_start = -1
+
+        while True:
+            pos = search_in.find(search_text, start_pos)
+            if pos == -1:
+                break
+            found_count += 1
+            if found_count == occurrence:
+                match_start = pos
+                break
+            start_pos = pos + 1
+
+        if match_start == -1:
+            return json.dumps({
+                "success": False,
+                "error": f"Text '{find_text}' not found" + (f" (occurrence {occurrence})" if occurrence > 1 else ""),
+                "occurrences_found": found_count
+            }, indent=2)
+
+        # Get the actual document indices
+        start_index = text_with_indices[match_start][1]
+        end_index = text_with_indices[match_start + len(find_text) - 1][1] + 1
+
+        # Apply the link
+        requests = [{
+            'updateTextStyle': {
+                'range': {'startIndex': start_index, 'endIndex': end_index},
+                'textStyle': {'link': {'url': url}},
+                'fields': 'link'
+            }
+        }]
+
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "linked_text": find_text,
+            "linked_range": {"start": start_index, "end": end_index},
+            "url": url,
+            "occurrence": occurrence
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
 @mcp.tool(name="insert_image")
 async def insert_image(
     document_id: str,

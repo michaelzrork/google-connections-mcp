@@ -260,7 +260,8 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 | `set_heading` | Apply heading styles (Heading 1-6 or normal text) |
 | `set_document_margins` | Set page margins (top, bottom, left, right in inches) |
 | `get_doc_structure` | Get detailed document structure with index positions for each element |
-| `insert_link` | Add a hyperlink to existing text |
+| `insert_link` | Add a hyperlink to existing text (requires indices) |
+| `link_text` | Find text and make it a hyperlink (easier - no indices needed) |
 | `insert_image` | Insert an image from a URL |
 | `insert_table` | Create a table with specified rows and columns |
 | `insert_page_break` | Insert a page break |
