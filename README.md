@@ -147,8 +147,7 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 | `add_row` | Append new row(s) to the end of the sheet |
 | `insert_row` | Insert row at specific position (shifts existing rows down) |
 | `delete_row` | Delete row(s) by row number or unique ID lookup |
-| `add_column` | Add a new column header (appends to next empty column) |
-| `insert_column` | Insert column at specific position (shifts existing columns right) |
+| `insert_column` | Insert column at position (shifts right) or append to first empty if no position given |
 | `delete_column` | Delete a column by header name or letter |
 | `create_spreadsheet` | Create a new Google Sheets document with optional worksheets |
 | `add_worksheet` | Add a new worksheet (tab) to an existing spreadsheet |

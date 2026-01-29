@@ -737,40 +737,6 @@ async def delete_row(params: DeleteRowInput) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-# --- add_column ---
-
-class AddColumnInput(BaseModel):
-    """Input for adding a column."""
-    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
-
-    spreadsheet_id: str = Field(..., min_length=1)
-    worksheet_name: str = Field(..., min_length=1)
-    header: str = Field(..., min_length=1)
-    column: Optional[str] = Field(default=None, description="Column letter (e.g. 'N'). Auto-detects next empty if omitted.")
-
-@mcp.tool(name="add_column")
-async def add_column(params: AddColumnInput) -> str:
-    """
-    Add a new column with a header. Auto-detects next empty column if not specified.
-    Writes the header to row 1 of the target column.
-    """
-    try:
-        ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
-
-        if params.column:
-            target = params.column.upper()
-        else:
-            headers = ws.row_values(1)
-            target = _col_letter(len(headers) + 1)
-
-        ws.update(f"{target}1", [[params.header]], value_input_option='USER_ENTERED')
-
-        return json.dumps({"success": True, "column": target, "header": params.header}, indent=2)
-
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
-
-
 # --- insert_column ---
 
 class InsertColumnInput(BaseModel):
@@ -779,43 +745,60 @@ class InsertColumnInput(BaseModel):
 
     spreadsheet_id: str = Field(..., min_length=1)
     worksheet_name: str = Field(..., min_length=1)
-    column: str = Field(..., description="Column letter or header name to insert BEFORE")
     header: str = Field(default=None, description="Header for the new column (optional)")
+    column: Optional[str] = Field(default=None, description="Column letter or header name to insert BEFORE. If omitted, appends to first empty column.")
     mode: str = Field(default="letter", description="'header' to find by header name, 'letter' for column letter")
 
 
 @mcp.tool(name="insert_column")
 async def insert_column(params: InsertColumnInput) -> str:
     """
-    Insert a new column at a specific position, shifting existing columns to the right.
-    Unlike add_column which appends to the end, this inserts and shifts.
+    Insert a new column.
+
+    If column is specified: inserts at that position, shifting existing columns right.
+    If column is omitted: appends to the first empty column (no shifting).
     """
     try:
         ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
 
-        # Resolve column position
-        if params.mode == "header":
-            headers = ws.row_values(1)
-            if params.column in headers:
-                col_num = headers.index(params.column) + 1
+        if params.column:
+            # Insert at specific position, shifting existing columns
+            if params.mode == "header":
+                headers = ws.row_values(1)
+                if params.column in headers:
+                    col_num = headers.index(params.column) + 1
+                else:
+                    return json.dumps({"success": False, "error": f"Header '{params.column}' not found"}, indent=2)
             else:
-                return json.dumps({"success": False, "error": f"Header '{params.column}' not found"}, indent=2)
+                col_num = _col_number(params.column.upper())
+
+            ws.insert_cols(col_num)
+
+            if params.header:
+                ws.update_cell(1, col_num, params.header)
+
+            return json.dumps({
+                "success": True,
+                "column": _col_letter(col_num),
+                "header": params.header,
+                "shifted": True,
+                "message": f"Column inserted at {_col_letter(col_num)}, existing columns shifted right"
+            }, indent=2)
         else:
-            col_num = _col_number(params.column.upper())
+            # Append to first empty column (no shifting)
+            headers = ws.row_values(1)
+            col_num = len(headers) + 1
 
-        # Insert the column
-        ws.insert_cols(col_num)
+            if params.header:
+                ws.update_cell(1, col_num, params.header)
 
-        # Add header if specified
-        if params.header:
-            ws.update_cell(1, col_num, params.header)
-
-        return json.dumps({
-            "success": True,
-            "inserted_at": _col_letter(col_num),
-            "header": params.header,
-            "message": f"Column inserted at {_col_letter(col_num)}, existing columns shifted right"
-        }, indent=2)
+            return json.dumps({
+                "success": True,
+                "column": _col_letter(col_num),
+                "header": params.header,
+                "shifted": False,
+                "message": f"Column added at {_col_letter(col_num)} (first empty column)"
+            }, indent=2)
 
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
