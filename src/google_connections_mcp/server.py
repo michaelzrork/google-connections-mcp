@@ -2796,12 +2796,16 @@ async def set_document_margins(
 
 
 @mcp.tool(name="get_doc_structure")
-async def get_doc_structure(document_id: str) -> str:
+async def get_doc_structure(document_id: str, include_formatting: bool = True) -> str:
     """
-    Get detailed document structure with index positions.
+    Get detailed document structure with index positions and inline formatting.
 
-    Returns each paragraph with its start/end indices, making it easy to
-    target specific text for formatting operations.
+    Args:
+        document_id: The document ID
+        include_formatting: If True, includes text runs with bold/italic/link info (default: True)
+
+    Returns each paragraph with its start/end indices and optionally the formatting
+    of each text run within, making it easy to target specific text for operations.
     """
     try:
         docs_service = auth.get_docs_service()
@@ -2817,17 +2821,48 @@ async def get_doc_structure(document_id: str) -> str:
                 if 'paragraph' in element:
                     para = element['paragraph']
                     text = ""
+                    runs = []
+
                     for para_element in para.get('elements', []):
                         if 'textRun' in para_element:
-                            text += para_element['textRun'].get('content', '')
+                            run_text = para_element['textRun'].get('content', '')
+                            text += run_text
 
-                    structure.append({
+                            if include_formatting:
+                                text_style = para_element['textRun'].get('textStyle', {})
+                                run_info = {
+                                    'text': run_text,
+                                    'startIndex': para_element.get('startIndex'),
+                                    'endIndex': para_element.get('endIndex')
+                                }
+                                # Only include formatting flags that are True or have values
+                                if text_style.get('bold'):
+                                    run_info['bold'] = True
+                                if text_style.get('italic'):
+                                    run_info['italic'] = True
+                                if text_style.get('underline'):
+                                    run_info['underline'] = True
+                                if text_style.get('strikethrough'):
+                                    run_info['strikethrough'] = True
+                                if 'link' in text_style:
+                                    run_info['link'] = text_style['link'].get('url', '')
+                                if 'fontSize' in text_style:
+                                    run_info['fontSize'] = text_style['fontSize'].get('magnitude')
+
+                                runs.append(run_info)
+
+                    para_info = {
                         'type': 'paragraph',
                         'startIndex': element.get('startIndex'),
                         'endIndex': element.get('endIndex'),
                         'text': text,
                         'style': para.get('paragraphStyle', {}).get('namedStyleType', 'NORMAL_TEXT')
-                    })
+                    }
+                    if include_formatting and runs:
+                        para_info['runs'] = runs
+
+                    structure.append(para_info)
+
                 elif 'table' in element:
                     structure.append({
                         'type': 'table',
