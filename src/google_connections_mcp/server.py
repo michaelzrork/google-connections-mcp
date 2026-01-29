@@ -1688,6 +1688,113 @@ async def unstar_task(task_list_id: str, task_id: str) -> str:
 # GOOGLE DRIVE TOOLS
 # ============================================================================
 
+@mcp.tool(name="list_folder")
+async def list_folder(folder_id: str = "root", max_results: int = 100, page_token: str = None) -> str:
+    """List contents of a Drive folder. Use 'root' for My Drive."""
+    try:
+        service = auth.get_drive_service()
+        query = f"'{folder_id}' in parents and trashed = false"
+        results = service.files().list(q=query, pageSize=max_results, pageToken=page_token,
+            fields="nextPageToken, files(id, name, mimeType, modifiedTime, size, webViewLink)",
+            orderBy="folder,name").execute()
+        files = results.get('files', [])
+        folders = [f for f in files if f.get('mimeType') == 'application/vnd.google-apps.folder']
+        documents = [f for f in files if f.get('mimeType') != 'application/vnd.google-apps.folder']
+        return json.dumps({"success": True, "folder_id": folder_id, "folders": folders,
+            "files": documents, "total_count": len(files),
+            "nextPageToken": results.get('nextPageToken')}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="create_folder")
+async def create_folder(name: str, parent_folder_id: str = None) -> str:
+    """Create a new folder in Google Drive. Creates in root if no parent specified."""
+    try:
+        service = auth.get_drive_service()
+        file_metadata = {'name': name, 'mimeType': 'application/vnd.google-apps.folder'}
+        if parent_folder_id:
+            file_metadata['parents'] = [parent_folder_id]
+        folder = service.files().create(body=file_metadata, fields='id, name, webViewLink').execute()
+        return json.dumps({"success": True, "folder": folder}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="move_file")
+async def move_file(file_id: str, destination_folder_id: str) -> str:
+    """Move a file to a different folder. Removes from current parent(s)."""
+    try:
+        service = auth.get_drive_service()
+        file = service.files().get(fileId=file_id, fields='parents').execute()
+        previous_parents = ",".join(file.get('parents', []))
+        updated_file = service.files().update(fileId=file_id, addParents=destination_folder_id,
+            removeParents=previous_parents, fields='id, name, parents, webViewLink').execute()
+        return json.dumps({"success": True, "file": updated_file}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="rename_file")
+async def rename_file(file_id: str, new_name: str) -> str:
+    """Rename a file or folder in Google Drive."""
+    try:
+        service = auth.get_drive_service()
+        updated_file = service.files().update(fileId=file_id, body={'name': new_name},
+            fields='id, name, mimeType, webViewLink').execute()
+        return json.dumps({"success": True, "file": updated_file}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="delete_file")
+async def delete_file(file_id: str, permanent: bool = False) -> str:
+    """Delete a file or folder. Default moves to trash; permanent=True deletes forever."""
+    try:
+        service = auth.get_drive_service()
+        if permanent:
+            service.files().delete(fileId=file_id).execute()
+            return json.dumps({"success": True, "message": f"File {file_id} permanently deleted"}, indent=2)
+        else:
+            updated_file = service.files().update(fileId=file_id, body={'trashed': True},
+                fields='id, name, trashed').execute()
+            return json.dumps({"success": True, "file": updated_file, "message": "File moved to trash"}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="share_file")
+async def share_file(file_id: str, email: str, role: str = "reader", send_notification: bool = True, message: str = None) -> str:
+    """Share a file with a user. Role: reader, commenter, or writer."""
+    try:
+        service = auth.get_drive_service()
+        permission = {'type': 'user', 'role': role, 'emailAddress': email}
+        created_permission = service.permissions().create(fileId=file_id, body=permission,
+            sendNotificationEmail=send_notification, emailMessage=message,
+            fields='id, type, role, emailAddress').execute()
+        return json.dumps({"success": True, "permission": created_permission,
+            "message": f"File shared with {email} as {role}"}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="copy_file")
+async def copy_file(file_id: str, new_name: str = None, destination_folder_id: str = None) -> str:
+    """Copy a file. Cannot copy folders. Optionally specify new name and/or destination folder."""
+    try:
+        service = auth.get_drive_service()
+        body = {}
+        if new_name:
+            body['name'] = new_name
+        if destination_folder_id:
+            body['parents'] = [destination_folder_id]
+        copied_file = service.files().copy(fileId=file_id, body=body if body else None,
+            fields='id, name, mimeType, parents, webViewLink').execute()
+        return json.dumps({"success": True, "file": copied_file}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
 @mcp.tool(name="search_drive")
 async def search_drive(
     query: str,

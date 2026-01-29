@@ -8,7 +8,7 @@ A Model Context Protocol (MCP) server that provides AI assistants with access to
 - **Google Calendar** - List, create, update, and delete events across all your calendars
 - **Gmail** - Read, send, search, label, archive, and manage messages
 - **Google Tasks** - Full task and task list management
-- **Google Drive** - Search files, get metadata, and download content (text, PDFs, images)
+- **Google Drive** - Search, list folders, create/move/rename/delete/share/copy files, download content
 - **Time** - Get current date/time in any IANA timezone
 
 ## How It Works
@@ -215,6 +215,13 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 | `search_drive` | Search files by query (name, type, etc.) |
 | `get_drive_file` | Get file metadata |
 | `download_drive_file` | Download and return file content |
+| `list_folder` | List contents of a folder (simpler than search) |
+| `create_folder` | Create a new folder |
+| `move_file` | Move a file to a different folder |
+| `rename_file` | Rename a file or folder |
+| `delete_file` | Delete/trash a file or folder |
+| `share_file` | Share a file with another user |
+| `copy_file` | Create a copy of a file |
 
 **Download supports**:
 - Text files → returns text content
@@ -223,6 +230,11 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 - Google Sheets → exports as CSV
 - Google Slides → exports as plain text
 - Images → returns base64-encoded data
+
+**File operations**:
+- `delete_file` moves to trash by default; use `permanent=True` to delete forever
+- `share_file` supports roles: `reader`, `commenter`, `writer`
+- `copy_file` cannot copy folders, only files
 
 ### Utility
 
