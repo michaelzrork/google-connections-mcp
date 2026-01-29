@@ -253,7 +253,8 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 | `replace_text` | Find and replace all occurrences of text |
 | `delete_doc_content` | Delete a range of content by start/end index |
 | `delete_empty_lines` | Remove excessive empty lines/paragraphs (configurable threshold) |
-| `format_text` | Apply text formatting: bold, italic, underline, strikethrough, font size, font family, colors |
+| `format_text` | Apply text formatting by index range (bold, italic, underline, font size, colors) |
+| `format_text_by_search` | Find text and apply formatting (easier - no indices needed) |
 | `format_paragraph` | Apply paragraph formatting: alignment, line spacing, space above/below, indentation |
 | `create_bullets` | Add bullet or numbered list formatting to paragraphs |
 | `remove_bullets` | Remove bullet/list formatting from paragraphs |

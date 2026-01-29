@@ -2537,6 +2537,146 @@ async def format_text(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
+@mcp.tool(name="format_text_by_search")
+async def format_text_by_search(
+    document_id: str,
+    find_text: str,
+    bold: bool = None,
+    italic: bool = None,
+    underline: bool = None,
+    strikethrough: bool = None,
+    font_size: int = None,
+    font_family: str = None,
+    foreground_color: str = None,
+    background_color: str = None,
+    match_case: bool = False,
+    occurrence: int = 1
+) -> str:
+    """
+    Find text in a Google Doc and apply formatting to it.
+
+    This is easier than format_text because you don't need to calculate indices.
+
+    Args:
+        document_id: The document ID
+        find_text: The exact text to find and format
+        bold: Set bold (True/False)
+        italic: Set italic (True/False)
+        underline: Set underline (True/False)
+        strikethrough: Set strikethrough (True/False)
+        font_size: Font size in points (e.g., 12, 14, 18)
+        font_family: Font name (e.g., 'Arial', 'Times New Roman')
+        foreground_color: Text color as hex (e.g., '#FF0000' for red)
+        background_color: Highlight color as hex
+        match_case: Whether to match case exactly (default: False)
+        occurrence: Which occurrence to format if text appears multiple times (1 = first)
+    """
+    try:
+        docs_service = auth.get_docs_service()
+        doc = docs_service.documents().get(documentId=document_id).execute()
+
+        # Build the full document text with index tracking
+        text_with_indices = []
+        if 'body' in doc and 'content' in doc['body']:
+            for element in doc['body']['content']:
+                if 'paragraph' in element:
+                    for para_element in element['paragraph'].get('elements', []):
+                        if 'textRun' in para_element:
+                            start_idx = para_element.get('startIndex', 0)
+                            text = para_element['textRun'].get('content', '')
+                            for i, char in enumerate(text):
+                                text_with_indices.append((char, start_idx + i))
+
+        full_text = ''.join([t[0] for t in text_with_indices])
+
+        # Search for the text
+        search_text = find_text if match_case else find_text.lower()
+        search_in = full_text if match_case else full_text.lower()
+
+        # Find the nth occurrence
+        start_pos = 0
+        found_count = 0
+        match_start = -1
+
+        while True:
+            pos = search_in.find(search_text, start_pos)
+            if pos == -1:
+                break
+            found_count += 1
+            if found_count == occurrence:
+                match_start = pos
+                break
+            start_pos = pos + 1
+
+        if match_start == -1:
+            return json.dumps({
+                "success": False,
+                "error": f"Text '{find_text}' not found" + (f" (occurrence {occurrence})" if occurrence > 1 else ""),
+                "occurrences_found": found_count
+            }, indent=2)
+
+        # Get the actual document indices
+        start_index = text_with_indices[match_start][1]
+        end_index = text_with_indices[match_start + len(find_text) - 1][1] + 1
+
+        # Build text style
+        text_style = {}
+        fields = []
+
+        if bold is not None:
+            text_style['bold'] = bold
+            fields.append('bold')
+        if italic is not None:
+            text_style['italic'] = italic
+            fields.append('italic')
+        if underline is not None:
+            text_style['underline'] = underline
+            fields.append('underline')
+        if strikethrough is not None:
+            text_style['strikethrough'] = strikethrough
+            fields.append('strikethrough')
+        if font_size is not None:
+            text_style['fontSize'] = {'magnitude': font_size, 'unit': 'PT'}
+            fields.append('fontSize')
+        if font_family is not None:
+            text_style['weightedFontFamily'] = {'fontFamily': font_family}
+            fields.append('weightedFontFamily')
+        if foreground_color is not None:
+            hex_color = foreground_color.lstrip('#')
+            r, g, b = tuple(int(hex_color[i:i+2], 16) / 255 for i in (0, 2, 4))
+            text_style['foregroundColor'] = {'color': {'rgbColor': {'red': r, 'green': g, 'blue': b}}}
+            fields.append('foregroundColor')
+        if background_color is not None:
+            hex_color = background_color.lstrip('#')
+            r, g, b = tuple(int(hex_color[i:i+2], 16) / 255 for i in (0, 2, 4))
+            text_style['backgroundColor'] = {'color': {'rgbColor': {'red': r, 'green': g, 'blue': b}}}
+            fields.append('backgroundColor')
+
+        if not fields:
+            return json.dumps({"success": False, "error": "No formatting options specified"}, indent=2)
+
+        requests = [{
+            'updateTextStyle': {
+                'range': {'startIndex': start_index, 'endIndex': end_index},
+                'textStyle': text_style,
+                'fields': ','.join(fields)
+            }
+        }]
+
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "formatted_text": find_text,
+            "formatted_range": {"start": start_index, "end": end_index},
+            "applied_styles": fields,
+            "occurrence": occurrence
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
 @mcp.tool(name="format_paragraph")
 async def format_paragraph(
     document_id: str,
