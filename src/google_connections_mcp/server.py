@@ -670,8 +670,8 @@ async def insert_row(params: InsertRowInput) -> str:
     try:
         ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
 
-        # Insert the row
-        ws.insert_rows(params.row, number_of_rows=1)
+        # Insert the row (gspread requires values as first arg, row position as kwarg)
+        ws.insert_rows([[""]], row=params.row)
 
         # Add data if specified
         if params.data:
@@ -772,7 +772,8 @@ async def insert_column(params: InsertColumnInput) -> str:
             else:
                 col_num = _col_number(params.column.upper())
 
-            ws.insert_cols(col_num, number_of_cols=1)
+            # gspread requires values as first arg, col position as kwarg
+            ws.insert_cols([[""]], col=col_num)
 
             if params.header:
                 ws.update_cell(1, col_num, params.header)
