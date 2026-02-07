@@ -6,6 +6,7 @@ Supports Sheets, Calendar, Gmail, Drive, and Tasks
 """
 
 import os
+import re
 import json
 from typing import Optional, List, Dict, Any
 from datetime import datetime
@@ -1227,12 +1228,13 @@ async def list_calendar_events(
     time_max: str = None,
     max_results: int = 25,
     query: str = None,
-    page_token: str = None
+    page_token: str = None,
+    detailed: bool = False
 ) -> str:
-    """List events from a calendar"""
+    """List events from a calendar. Returns a compact summary by default. Set detailed=True to get the full API response including all attendees, conference data, and metadata."""
     try:
         service = auth.get_calendar_service()
-        
+
         events_result = service.events().list(
             calendarId=calendar_id,
             timeMin=time_min,
@@ -1243,10 +1245,63 @@ async def list_calendar_events(
             q=query,
             pageToken=page_token
         ).execute()
-        
+
+        events = events_result.get('items', [])
+
+        if detailed:
+            return json.dumps({
+                "success": True,
+                "events": events,
+                "nextPageToken": events_result.get('nextPageToken')
+            }, indent=2)
+
+        compact_events = []
+        for event in events:
+            # Determine date/time display
+            start = event.get('start', {})
+            end = event.get('end', {})
+            if 'date' in start:
+                time_display = "All day"
+                date_display = start['date']
+            else:
+                dt = start.get('dateTime', '')
+                date_display = dt[:10] if dt else ''
+                start_time = dt[11:16] if len(dt) > 16 else ''
+                end_time = end.get('dateTime', '')[11:16] if end.get('dateTime', '') and len(end.get('dateTime', '')) > 16 else ''
+                time_display = f"{start_time} - {end_time}" if start_time else ''
+
+            compact = {
+                "id": event.get('id'),
+                "date": date_display,
+                "time": time_display,
+                "summary": event.get('summary', '(No title)'),
+                "organizer": event.get('organizer', {}).get('email') or event.get('organizer', {}).get('displayName'),
+                "status": event.get('status'),
+                "your_response": next((a['responseStatus'] for a in event.get('attendees', []) if a.get('self')), None),
+            }
+
+            if event.get('location'):
+                compact["location"] = event['location']
+            if event.get('description'):
+                # Strip HTML tags for plain text
+                desc = event['description']
+                desc = re.sub(r'<[^>]+>', '', desc)
+                desc = desc.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+                compact["description"] = desc.strip()
+            if event.get('eventType') and event['eventType'] != 'default':
+                compact["event_type"] = event['eventType']
+            if event.get('hangoutLink'):
+                compact["meeting_link"] = event['hangoutLink']
+
+            attendee_count = len(event.get('attendees', []))
+            if attendee_count > 0:
+                compact["attendee_count"] = attendee_count
+
+            compact_events.append(compact)
+
         return json.dumps({
             "success": True,
-            "events": events_result.get('items', []),
+            "events": compact_events,
             "nextPageToken": events_result.get('nextPageToken')
         }, indent=2)
     except Exception as e:
@@ -1496,10 +1551,11 @@ async def list_gmail_messages(
     query: str = None,
     max_results: int = 10,
     page_token: str = None,
-    include_labels: bool = False
+    detailed: bool = False
 ) -> str:
     """
-    List Gmail messages with optional search query. Returns clean, summarized results.
+    List Gmail messages with optional search query. Returns a compact summary by default.
+    Set detailed=True to get the full API response including all headers, payload, and metadata.
 
     Query examples:
     - "from:example@gmail.com"
@@ -1513,7 +1569,7 @@ async def list_gmail_messages(
         query: Gmail search query (uses Gmail's search syntax)
         max_results: Maximum messages to return (default 10, max 100)
         page_token: Token for pagination (from previous response)
-        include_labels: Include label IDs in response (default False)
+        detailed: Return full API response (default False)
     """
     try:
         service = auth.get_gmail_service()
@@ -1528,31 +1584,47 @@ async def list_gmail_messages(
 
         messages = result.get('messages', [])
 
+        # System labels to hide (internal Gmail labels)
+        HIDDEN_LABELS = {'CATEGORY_PERSONAL', 'CATEGORY_SOCIAL', 'CATEGORY_PROMOTIONS',
+                         'CATEGORY_UPDATES', 'CATEGORY_FORUMS'}
+
         detailed_messages = []
         for msg in messages[:max_results]:
-            msg_detail = service.users().messages().get(
-                userId='me',
-                id=msg['id'],
-                format='metadata',
-                metadataHeaders=['From', 'To', 'Subject', 'Date']
-            ).execute()
+            if detailed:
+                msg_detail = service.users().messages().get(
+                    userId='me',
+                    id=msg['id'],
+                    format='full'
+                ).execute()
+                detailed_messages.append(msg_detail)
+            else:
+                msg_detail = service.users().messages().get(
+                    userId='me',
+                    id=msg['id'],
+                    format='metadata',
+                    metadataHeaders=['From', 'To', 'Subject', 'Date']
+                ).execute()
 
-            headers = {h['name']: h['value'] for h in msg_detail.get('payload', {}).get('headers', [])}
+                headers = {h['name']: h['value'] for h in msg_detail.get('payload', {}).get('headers', [])}
+                label_ids = msg_detail.get('labelIds', [])
 
-            message_data = {
-                'id': msg_detail['id'],
-                'threadId': msg_detail['threadId'],
-                'from': _format_email_address(headers.get('From', '')),
-                'to': _format_email_address(headers.get('To', '')),
-                'subject': headers.get('Subject', ''),
-                'date': _parse_date(headers.get('Date', '')),
-                'snippet': msg_detail.get('snippet', '')
-            }
+                compact = {
+                    'id': msg_detail['id'],
+                    'threadId': msg_detail['threadId'],
+                    'from': _format_email_address(headers.get('From', '')),
+                    'to': _format_email_address(headers.get('To', '')),
+                    'subject': headers.get('Subject', ''),
+                    'date': _parse_date(headers.get('Date', '')),
+                    'snippet': msg_detail.get('snippet', ''),
+                    'is_unread': 'UNREAD' in label_ids,
+                }
 
-            if include_labels:
-                message_data['labels'] = msg_detail.get('labelIds', [])
+                # Show meaningful labels only
+                visible_labels = [l for l in label_ids if l not in HIDDEN_LABELS]
+                if visible_labels:
+                    compact['labels'] = visible_labels
 
-            detailed_messages.append(message_data)
+                detailed_messages.append(compact)
 
         response = {
             "success": True,
