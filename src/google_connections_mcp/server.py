@@ -3364,31 +3364,107 @@ async def remove_bullets(document_id: str, start_index: int, end_index: int) -> 
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
+@mcp.tool(name="merge_paragraphs")
+async def merge_paragraphs(
+    document_id: str,
+    paragraph_break_index: int
+) -> str:
+    """
+    Merge two paragraphs by replacing the paragraph break (newline) at the given index
+    with a vertical tab character (soft line break). This keeps the text on separate
+    visual lines but within a single paragraph.
+
+    This is useful for things like contact info blocks where you want multiple lines
+    that share the same paragraph style (e.g., two address lines in one paragraph).
+
+    To find the correct index, use get_doc_structure to examine the document. The
+    paragraph_break_index should be the index of the newline character ('\\n') that
+    separates the two paragraphs you want to merge.
+
+    Args:
+        document_id: The document ID
+        paragraph_break_index: The index of the paragraph break (newline) to replace with a vertical tab
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        # Delete the newline character and insert a vertical tab in its place.
+        # Must do delete first, then insert, in reverse-index order for batchUpdate.
+        requests = [
+            {
+                'deleteContentRange': {
+                    'range': {
+                        'startIndex': paragraph_break_index,
+                        'endIndex': paragraph_break_index + 1
+                    }
+                }
+            },
+            {
+                'insertText': {
+                    'location': {'index': paragraph_break_index},
+                    'text': '\u000b'
+                }
+            }
+        ]
+
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "merged_at_index": paragraph_break_index,
+            "description": "Replaced paragraph break with vertical tab (soft line break)"
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
 @mcp.tool(name="set_heading")
 async def set_heading(
     document_id: str,
     start_index: int,
     end_index: int,
-    heading_level: int
+    heading_level: int = None,
+    style_name: str = None
 ) -> str:
     """
-    Apply a heading style to paragraphs.
+    Apply a heading or paragraph style to paragraphs.
+
+    You can use either heading_level (for backward compatibility) or style_name (for full control).
+    If style_name is provided, it takes priority over heading_level.
 
     Args:
         document_id: The document ID
         start_index: Start position (1-based)
         end_index: End position (exclusive)
-        heading_level: 0 for normal text, 1-6 for Heading 1 through Heading 6
+        heading_level: 0 for normal text, 1-6 for Heading 1 through Heading 6 (legacy parameter)
+        style_name: Named style to apply. One of: 'TITLE', 'SUBTITLE', 'NORMAL_TEXT', 'HEADING_1' through 'HEADING_6'
     """
     try:
         docs_service = auth.get_docs_service()
 
-        if heading_level == 0:
-            named_style = 'NORMAL_TEXT'
-        elif 1 <= heading_level <= 6:
-            named_style = f'HEADING_{heading_level}'
+        valid_style_names = {
+            'TITLE', 'SUBTITLE', 'NORMAL_TEXT',
+            'HEADING_1', 'HEADING_2', 'HEADING_3',
+            'HEADING_4', 'HEADING_5', 'HEADING_6'
+        }
+
+        if style_name is not None:
+            named_style = style_name.upper()
+            if named_style not in valid_style_names:
+                return json.dumps({
+                    "success": False,
+                    "error": f"Invalid style_name '{style_name}'. Must be one of: {', '.join(sorted(valid_style_names))}"
+                }, indent=2)
+        elif heading_level is not None:
+            if heading_level == 0:
+                named_style = 'NORMAL_TEXT'
+            elif 1 <= heading_level <= 6:
+                named_style = f'HEADING_{heading_level}'
+            else:
+                return json.dumps({"success": False, "error": "heading_level must be 0-6"}, indent=2)
         else:
-            return json.dumps({"success": False, "error": "heading_level must be 0-6"}, indent=2)
+            return json.dumps({"success": False, "error": "Either heading_level or style_name must be provided"}, indent=2)
 
         requests = [{
             'updateParagraphStyle': {
@@ -3688,6 +3764,184 @@ async def link_text(
             "linked_range": {"start": start_index, "end": end_index},
             "url": url,
             "occurrence": occurrence
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="remove_link")
+async def remove_link(
+    document_id: str,
+    start_index: int,
+    end_index: int
+) -> str:
+    """
+    Remove a hyperlink from text in a Google Doc while keeping the text itself.
+
+    Args:
+        document_id: The document ID
+        start_index: Start position of linked text
+        end_index: End position of linked text (exclusive)
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        requests = [{
+            'updateTextStyle': {
+                'range': {'startIndex': start_index, 'endIndex': end_index},
+                'textStyle': {'link': None},
+                'fields': 'link'
+            }
+        }]
+
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "unlinked_range": {"start": start_index, "end": end_index}
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="remove_link_by_search")
+async def remove_link_by_search(
+    document_id: str,
+    find_text: str,
+    match_case: bool = False,
+    occurrence: int = 1
+) -> str:
+    """
+    Find text in a Google Doc and remove its hyperlink while keeping the text.
+
+    This is easier to use than remove_link because you don't need to calculate indices.
+
+    Args:
+        document_id: The document ID
+        find_text: The exact text to find and unlink
+        match_case: Whether to match case exactly (default: False)
+        occurrence: Which occurrence to unlink if text appears multiple times (1 = first, 2 = second, etc.)
+    """
+    try:
+        docs_service = auth.get_docs_service()
+        doc = docs_service.documents().get(documentId=document_id).execute()
+
+        # Build the full document text with index tracking
+        text_with_indices = []
+        if 'body' in doc and 'content' in doc['body']:
+            for element in doc['body']['content']:
+                if 'paragraph' in element:
+                    for para_element in element['paragraph'].get('elements', []):
+                        if 'textRun' in para_element:
+                            start_idx = para_element.get('startIndex', 0)
+                            text = para_element['textRun'].get('content', '')
+                            for i, char in enumerate(text):
+                                text_with_indices.append((char, start_idx + i))
+
+        full_text = ''.join([t[0] for t in text_with_indices])
+
+        # Search for the text
+        search_text = find_text if match_case else find_text.lower()
+        search_in = full_text if match_case else full_text.lower()
+
+        # Find the nth occurrence
+        start_pos = 0
+        found_count = 0
+        match_start = -1
+
+        while True:
+            pos = search_in.find(search_text, start_pos)
+            if pos == -1:
+                break
+            found_count += 1
+            if found_count == occurrence:
+                match_start = pos
+                break
+            start_pos = pos + 1
+
+        if match_start == -1:
+            return json.dumps({
+                "success": False,
+                "error": f"Text '{find_text}' not found" + (f" (occurrence {occurrence})" if occurrence > 1 else ""),
+                "occurrences_found": found_count
+            }, indent=2)
+
+        # Get the actual document indices
+        start_index = text_with_indices[match_start][1]
+        end_index = text_with_indices[match_start + len(find_text) - 1][1] + 1
+
+        # Remove the link
+        requests = [{
+            'updateTextStyle': {
+                'range': {'startIndex': start_index, 'endIndex': end_index},
+                'textStyle': {'link': None},
+                'fields': 'link'
+            }
+        }]
+
+        docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "unlinked_text": find_text,
+            "unlinked_range": {"start": start_index, "end": end_index},
+            "occurrence": occurrence
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="batch_update_doc")
+async def batch_update_doc(
+    document_id: str,
+    requests_json: str
+) -> str:
+    """
+    Send raw batchUpdate requests to the Google Docs API. This is an advanced fallback
+    tool for operations not covered by other specific tools.
+
+    The requests_json parameter should be a JSON string containing a list of request objects
+    as defined in the Google Docs API batchUpdate documentation. Each request object should
+    have exactly one operation key (e.g., 'updateParagraphStyle', 'updateTextStyle',
+    'insertText', 'deleteContentRange', etc.).
+
+    Example requests_json for updating paragraph style to TITLE:
+        [{"updateParagraphStyle": {"range": {"startIndex": 1, "endIndex": 10}, "paragraphStyle": {"namedStyleType": "TITLE"}, "fields": "namedStyleType"}}]
+
+    Example requests_json for inserting a page break:
+        [{"insertPageBreak": {"location": {"index": 50}}}]
+
+    Args:
+        document_id: The document ID
+        requests_json: A JSON string containing a list of Google Docs API batchUpdate request objects
+    """
+    try:
+        docs_service = auth.get_docs_service()
+
+        requests = json.loads(requests_json)
+        if not isinstance(requests, list):
+            return json.dumps({
+                "success": False,
+                "error": "requests_json must be a JSON array of request objects"
+            }, indent=2)
+
+        result = docs_service.documents().batchUpdate(
+            documentId=document_id,
+            body={'requests': requests}
+        ).execute()
+
+        return json.dumps({
+            "success": True,
+            "document_id": document_id,
+            "requests_sent": len(requests),
+            "replies": result.get('replies', [])
+        }, indent=2)
+    except json.JSONDecodeError as e:
+        return json.dumps({
+            "success": False,
+            "error": f"Invalid JSON in requests_json: {str(e)}"
         }, indent=2)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
