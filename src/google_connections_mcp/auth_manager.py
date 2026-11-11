@@ -27,9 +27,16 @@ class GoogleAuthManager:
         if token_json:
             try:
                 creds_info = json.loads(token_json)
+                # Use the scopes the token was actually GRANTED (saved in the
+                # token JSON), not the app's full list. A refresh asks Google
+                # for exactly these scopes, and asking for one the token was
+                # never granted (say, a scope added to ALL_SCOPES since you
+                # last authorized) can fail the refresh and take every tool
+                # down until you re-authorize. Older tokens without a
+                # "scopes" entry fall back to ALL_SCOPES as before.
                 self.credentials = Credentials.from_authorized_user_info(
                     creds_info,
-                    ALL_SCOPES
+                    None if creds_info.get('scopes') else ALL_SCOPES
                 )
             except Exception as e:
                 print(f"Error loading token: {e}")
@@ -103,6 +110,27 @@ class GoogleAuthManager:
         creds = self.get_credentials()
         return build('tasks', 'v1', credentials=creds)
     
+    def has_scope(self, scope):
+        """True if the current token was granted this scope"""
+        creds = self.get_credentials()
+        granted = getattr(creds, 'granted_scopes', None) or creds.scopes or []
+        return scope in granted
+
+    def get_search_console_service(self):
+        """Get authenticated Search Console service"""
+        creds = self.get_credentials()
+        return build('searchconsole', 'v1', credentials=creds)
+
+    def get_analytics_data_service(self):
+        """Get authenticated Google Analytics Data API (GA4 reports) service"""
+        creds = self.get_credentials()
+        return build('analyticsdata', 'v1beta', credentials=creds)
+
+    def get_analytics_admin_service(self):
+        """Get authenticated Google Analytics Admin API service (property list)"""
+        creds = self.get_credentials()
+        return build('analyticsadmin', 'v1beta', credentials=creds)
+
     def get_keep_service(self):
         """Get authenticated Google Keep service"""
         creds = self.get_credentials()

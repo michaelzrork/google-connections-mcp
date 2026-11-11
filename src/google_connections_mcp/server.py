@@ -2,7 +2,7 @@
 """
 Google Connections MCP Server
 Generic Google Workspace API access with OAuth
-Supports Sheets, Calendar, Gmail, Drive, and Tasks
+Supports Sheets, Calendar, Gmail, Drive, Tasks, Search Console and Google Analytics
 """
 
 import os
@@ -4141,6 +4141,313 @@ async def insert_page_break(document_id: str, index: int) -> str:
             "document_id": document_id,
             "page_break_at": index
         }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+# ============================================================================
+# SEARCH CONSOLE & GOOGLE ANALYTICS (GA4) TOOLS - read only
+# ============================================================================
+# Scopes: webmasters.readonly and analytics.readonly (oauth_config.py). A token
+# authorized before those were added doesn't have them: re-run /oauth/start and
+# update GOOGLE_TOKEN_JSON. Defaults: SEARCH_CONSOLE_SITE (e.g.
+# "sc-domain:example.com" or "https://www.example.com/") and GA4_PROPERTY_ID
+# (the numeric property ID, NOT the G-XXXX measurement ID) can be set as
+# environment variables so the site / property can be left out of each call.
+
+_SC_SCOPE = 'https://www.googleapis.com/auth/webmasters.readonly'
+_GA_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly'
+
+
+def _scope_error(scope: str, what: str) -> Optional[str]:
+    """A JSON error when the token lacks a scope, else None."""
+    try:
+        if auth.has_scope(scope):
+            return None
+    except Exception:
+        return None  # let the API call report the real problem
+    return json.dumps({
+        "success": False,
+        "error": f"This Google token wasn't granted access to {what}. Visit /oauth/start on this server, "
+                 "approve the new permission, and update GOOGLE_TOKEN_JSON on Railway with the token from the logs."
+    }, indent=2)
+
+
+def _sc_site(site_url: Optional[str]) -> str:
+    site = (site_url or os.environ.get('SEARCH_CONSOLE_SITE') or '').strip()
+    if not site:
+        raise ValueError("No site given. Pass site_url (see list_search_console_sites) or set SEARCH_CONSOLE_SITE.")
+    return site
+
+
+def _ga_property(property_id: Optional[str]) -> str:
+    pid = (property_id or os.environ.get('GA4_PROPERTY_ID') or '').strip()
+    if not pid:
+        raise ValueError("No property given. Pass property_id (see list_analytics_properties) or set GA4_PROPERTY_ID.")
+    if pid.upper().startswith('G-'):
+        raise ValueError(f"{pid} is a measurement ID. Use the numeric GA4 property ID (list_analytics_properties shows it).")
+    return pid if pid.startswith('properties/') else f"properties/{pid}"
+
+
+def _ga_rows(resp: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """GA4 response rows as plain dicts keyed by dimension/metric name."""
+    dims = [h.get('name') for h in resp.get('dimensionHeaders', [])]
+    mets = [h.get('name') for h in resp.get('metricHeaders', [])]
+    out = []
+    for r in resp.get('rows', []) or []:
+        row = {}
+        for name, v in zip(dims, r.get('dimensionValues', [])):
+            row[name] = v.get('value')
+        for name, v in zip(mets, r.get('metricValues', [])):
+            val = v.get('value')
+            try:
+                num = float(val)
+                row[name] = int(num) if num.is_integer() else round(num, 4)
+            except (TypeError, ValueError):
+                row[name] = val
+        out.append(row)
+    return out
+
+
+@mcp.tool(name="list_search_console_sites")
+async def list_search_console_sites() -> str:
+    """List the Search Console properties this account can see, with permission level.
+    Use a returned siteUrl (e.g. "sc-domain:example.com" or "https://www.example.com/") as site_url in the other tools."""
+    err = _scope_error(_SC_SCOPE, "Search Console")
+    if err:
+        return err
+    try:
+        service = auth.get_search_console_service()
+        res = service.sites().list().execute()
+        return json.dumps({"success": True, "sites": res.get('siteEntry', [])}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+class SearchConsoleQueryInput(BaseModel):
+    """Input for a Search Console search performance query."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+
+    start_date: str = Field(..., description="YYYY-MM-DD. Data is usually 2-3 days behind.")
+    end_date: str = Field(..., description="YYYY-MM-DD")
+    site_url: Optional[str] = Field(default=None, description="Search Console property; defaults to SEARCH_CONSOLE_SITE")
+    dimensions: List[str] = Field(default=["query"], description="Any of: query, page, country, device, date, searchAppearance")
+    search_type: str = Field(default="web", description="web, image, video, news, discover or googleNews")
+    query_contains: Optional[str] = Field(default=None, description="Only queries containing this text")
+    page_contains: Optional[str] = Field(default=None, description="Only pages whose URL contains this text")
+    country: Optional[str] = Field(default=None, description="3-letter country code, e.g. usa")
+    device: Optional[str] = Field(default=None, description="DESKTOP, MOBILE or TABLET")
+    row_limit: int = Field(default=100, ge=1, le=25000)
+    start_row: int = Field(default=0, ge=0)
+
+
+@mcp.tool(name="search_console_query")
+async def search_console_query(params: SearchConsoleQueryInput) -> str:
+    """Search performance from Google Search Console: clicks, impressions, CTR and average position,
+    grouped by the dimensions you choose (query, page, country, device, date). Sorted by clicks.
+    Example: dimensions ["query"] for the searches people found the site with; ["page"] for which pages get traffic;
+    ["query","page"] for both. Use page_contains / query_contains to narrow."""
+    err = _scope_error(_SC_SCOPE, "Search Console")
+    if err:
+        return err
+    try:
+        site = _sc_site(params.site_url)
+        filters = []
+        if params.query_contains:
+            filters.append({"dimension": "query", "operator": "contains", "expression": params.query_contains})
+        if params.page_contains:
+            filters.append({"dimension": "page", "operator": "contains", "expression": params.page_contains})
+        if params.country:
+            filters.append({"dimension": "country", "operator": "equals", "expression": params.country.lower()})
+        if params.device:
+            filters.append({"dimension": "device", "operator": "equals", "expression": params.device.upper()})
+        body = {
+            "startDate": params.start_date,
+            "endDate": params.end_date,
+            "dimensions": params.dimensions,
+            "type": params.search_type,
+            "rowLimit": params.row_limit,
+            "startRow": params.start_row,
+        }
+        if filters:
+            body["dimensionFilterGroups"] = [{"groupType": "and", "filters": filters}]
+        service = auth.get_search_console_service()
+        res = service.searchanalytics().query(siteUrl=site, body=body).execute()
+        rows = []
+        for r in res.get('rows', []) or []:
+            row = {d: k for d, k in zip(params.dimensions, r.get('keys', []))}
+            row.update({
+                "clicks": r.get('clicks', 0),
+                "impressions": r.get('impressions', 0),
+                "ctr": round(r.get('ctr', 0) * 100, 2),
+                "position": round(r.get('position', 0), 1),
+            })
+            rows.append(row)
+        return json.dumps({
+            "success": True,
+            "site_url": site,
+            "date_range": [params.start_date, params.end_date],
+            "row_count": len(rows),
+            "note": "ctr is a percentage; position is the average ranking (1 = top).",
+            "rows": rows,
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="inspect_url")
+async def inspect_url(url: str, site_url: Optional[str] = None) -> str:
+    """Google's index status for one URL (URL Inspection): whether it's indexed, the coverage state,
+    last crawl time, the canonical Google chose, and mobile usability. The URL must belong to site_url's property."""
+    err = _scope_error(_SC_SCOPE, "Search Console")
+    if err:
+        return err
+    try:
+        site = _sc_site(site_url)
+        service = auth.get_search_console_service()
+        res = service.urlInspection().index().inspect(body={"inspectionUrl": url, "siteUrl": site}).execute()
+        result = res.get('inspectionResult', {})
+        idx = result.get('indexStatusResult', {})
+        return json.dumps({
+            "success": True,
+            "url": url,
+            "verdict": idx.get('verdict'),
+            "coverage_state": idx.get('coverageState'),
+            "indexing_state": idx.get('indexingState'),
+            "page_fetch_state": idx.get('pageFetchState'),
+            "robots_txt_state": idx.get('robotsTxtState'),
+            "last_crawl_time": idx.get('lastCrawlTime'),
+            "google_canonical": idx.get('googleCanonical'),
+            "user_canonical": idx.get('userCanonical'),
+            "sitemaps": idx.get('sitemap'),
+            "referring_urls": idx.get('referringUrls'),
+            "inspection_result_link": result.get('inspectionResultLink'),
+            "raw": result,
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="list_sitemaps")
+async def list_sitemaps(site_url: Optional[str] = None) -> str:
+    """Sitemaps submitted for a Search Console property, with last download time, warnings and errors."""
+    err = _scope_error(_SC_SCOPE, "Search Console")
+    if err:
+        return err
+    try:
+        site = _sc_site(site_url)
+        service = auth.get_search_console_service()
+        res = service.sitemaps().list(siteUrl=site).execute()
+        return json.dumps({"success": True, "site_url": site, "sitemaps": res.get('sitemap', [])}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="list_analytics_properties")
+async def list_analytics_properties() -> str:
+    """List the Google Analytics (GA4) accounts and properties this account can see, with their numeric property IDs.
+    Needs the Google Analytics Admin API enabled in the Cloud project."""
+    err = _scope_error(_GA_SCOPE, "Google Analytics")
+    if err:
+        return err
+    try:
+        service = auth.get_analytics_admin_service()
+        summaries, token = [], None
+        while True:
+            res = service.accountSummaries().list(pageSize=200, pageToken=token).execute()
+            summaries.extend(res.get('accountSummaries', []))
+            token = res.get('nextPageToken')
+            if not token:
+                break
+        out = []
+        for a in summaries:
+            for p in a.get('propertySummaries', []) or []:
+                out.append({
+                    "account": a.get('displayName'),
+                    "property": p.get('displayName'),
+                    "property_id": (p.get('property') or '').replace('properties/', ''),
+                })
+        return json.dumps({"success": True, "properties": out}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+class AnalyticsReportInput(BaseModel):
+    """Input for a GA4 report."""
+    model_config = ConfigDict(str_strip_whitespace=True, extra='forbid')
+
+    start_date: str = Field(default="28daysAgo", description="YYYY-MM-DD, or relative: today, yesterday, NdaysAgo")
+    end_date: str = Field(default="today", description="YYYY-MM-DD, or relative: today, yesterday, NdaysAgo")
+    metrics: List[str] = Field(default=["activeUsers", "sessions", "screenPageViews"],
+                               description="GA4 metric names, e.g. activeUsers, newUsers, sessions, screenPageViews, engagementRate, averageSessionDuration, eventCount, conversions")
+    dimensions: List[str] = Field(default=[],
+                                  description="GA4 dimension names, e.g. date, pagePath, pageTitle, landingPage, sessionSource, sessionMedium, sessionDefaultChannelGroup, country, deviceCategory, eventName")
+    property_id: Optional[str] = Field(default=None, description="Numeric GA4 property ID; defaults to GA4_PROPERTY_ID")
+    filter_dimension: Optional[str] = Field(default=None, description="Only rows where this dimension...")
+    filter_value: Optional[str] = Field(default=None, description="...matches this value")
+    filter_match: str = Field(default="EXACT", description="EXACT, BEGINS_WITH, ENDS_WITH, CONTAINS or FULL_REGEXP")
+    order_by_metric: Optional[str] = Field(default=None, description="Sort by this metric, largest first (default: the first metric)")
+    order_by_dimension: Optional[str] = Field(default=None, description="Sort by this dimension ascending instead (e.g. date)")
+    limit: int = Field(default=100, ge=1, le=100000)
+
+
+@mcp.tool(name="analytics_report")
+async def analytics_report(params: AnalyticsReportInput) -> str:
+    """Run a Google Analytics (GA4) report: metrics over a date range, optionally split by dimensions.
+    Examples: top pages = dimensions ["pagePath"], metrics ["screenPageViews","activeUsers"];
+    traffic sources = dimensions ["sessionSource","sessionMedium"]; daily trend = dimensions ["date"], order_by_dimension "date";
+    one event = dimensions ["eventName"], filter_dimension "eventName", filter_value "join_discord"."""
+    err = _scope_error(_GA_SCOPE, "Google Analytics")
+    if err:
+        return err
+    try:
+        prop = _ga_property(params.property_id)
+        body: Dict[str, Any] = {
+            "dateRanges": [{"startDate": params.start_date, "endDate": params.end_date}],
+            "metrics": [{"name": m} for m in params.metrics],
+            "dimensions": [{"name": d} for d in params.dimensions],
+            "limit": params.limit,
+        }
+        if params.filter_dimension and params.filter_value is not None:
+            body["dimensionFilter"] = {"filter": {
+                "fieldName": params.filter_dimension,
+                "stringFilter": {"matchType": params.filter_match.upper(), "value": params.filter_value},
+            }}
+        if params.order_by_dimension:
+            body["orderBys"] = [{"dimension": {"dimensionName": params.order_by_dimension}}]
+        elif params.metrics:
+            body["orderBys"] = [{"metric": {"metricName": params.order_by_metric or params.metrics[0]}, "desc": True}]
+        service = auth.get_analytics_data_service()
+        res = service.properties().runReport(property=prop, body=body).execute()
+        return json.dumps({
+            "success": True,
+            "property": prop,
+            "date_range": [params.start_date, params.end_date],
+            "row_count": res.get('rowCount', 0),
+            "rows": _ga_rows(res),
+            "totals": _ga_rows({"dimensionHeaders": [], "metricHeaders": res.get('metricHeaders', []),
+                                "rows": [{"metricValues": t.get('metricValues', [])} for t in res.get('totals', []) or []]}),
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
+
+
+@mcp.tool(name="analytics_realtime")
+async def analytics_realtime(metrics: Optional[List[str]] = None, dimensions: Optional[List[str]] = None,
+                             property_id: Optional[str] = None, limit: int = 50) -> str:
+    """Google Analytics (GA4) realtime report: activity in the last 30 minutes.
+    Default: activeUsers by unifiedScreenName (page title). Other dimensions: country, deviceCategory, eventName, minutesAgo."""
+    err = _scope_error(_GA_SCOPE, "Google Analytics")
+    if err:
+        return err
+    try:
+        prop = _ga_property(property_id)
+        mets = metrics or ["activeUsers"]
+        dims = dimensions if dimensions is not None else ["unifiedScreenName"]
+        body = {"metrics": [{"name": m} for m in mets], "dimensions": [{"name": d} for d in dims], "limit": limit}
+        service = auth.get_analytics_data_service()
+        res = service.properties().runRealtimeReport(property=prop, body=body).execute()
+        return json.dumps({"success": True, "property": prop, "rows": _ga_rows(res)}, indent=2)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 

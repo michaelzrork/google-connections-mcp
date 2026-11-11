@@ -25,7 +25,13 @@ ALL_SCOPES = [
     'https://www.googleapis.com/auth/documents',
     
     # Tasks - Read/Write
-    'https://www.googleapis.com/auth/tasks'
+    'https://www.googleapis.com/auth/tasks',
+
+    # Search Console - Read only (search performance, URL inspection, sitemaps)
+    'https://www.googleapis.com/auth/webmasters.readonly',
+
+    # Google Analytics (GA4) - Read only (reports, realtime, property list)
+    'https://www.googleapis.com/auth/analytics.readonly'
 ]
 
 # Scope descriptions for user consent screen
@@ -35,7 +41,9 @@ SCOPE_DESCRIPTIONS = {
     'drive': 'Access and manage your Google Drive files',
     'sheets': 'Read and write to Google Sheets',
     'docs': 'Access and edit Google Docs',
-    'tasks': 'Access and manage Google Tasks'
+    'tasks': 'Access and manage Google Tasks',
+    'search_console': 'View Search Console data for your sites',
+    'analytics': 'View your Google Analytics data'
 }
 
 def get_required_scopes():
@@ -68,6 +76,12 @@ def get_service_scopes(service_name):
         ],
         'tasks': [
             'https://www.googleapis.com/auth/tasks'
+        ],
+        'search_console': [
+            'https://www.googleapis.com/auth/webmasters.readonly'
+        ],
+        'analytics': [
+            'https://www.googleapis.com/auth/analytics.readonly'
         ]
     }
     return scope_map.get(service_name, [])

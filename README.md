@@ -10,6 +10,8 @@ A Model Context Protocol (MCP) server that provides AI assistants with access to
 - **Google Tasks** - Full task and task list management
 - **Google Drive** - Search, list folders, create/move/rename/delete/share/copy files, download content
 - **Google Docs** - Create documents, read/edit content, formatting (bold, italic, fonts, headings, bullets, margins)
+- **Search Console** - Search performance (queries, pages, clicks, impressions, position), URL index status, sitemaps (read only)
+- **Google Analytics (GA4)** - Reports, realtime activity, property list (read only)
 - **Time** - Get current date/time in any IANA timezone
 
 ## How It Works
@@ -40,6 +42,9 @@ Each user deploys their own instance with their own credentials - your data stay
    - Google Drive API
    - Google Sheets API
    - Google Tasks API
+   - Google Search Console API
+   - Google Analytics Data API
+   - Google Analytics Admin API (only for `list_analytics_properties`)
 
 4. Configure OAuth consent screen (APIs & Services → OAuth consent screen):
    - User Type: **External**
@@ -53,6 +58,9 @@ Each user deploys their own instance with their own credentials - your data stay
      - `https://www.googleapis.com/auth/drive`
      - `https://www.googleapis.com/auth/spreadsheets`
      - `https://www.googleapis.com/auth/tasks`
+     - `https://www.googleapis.com/auth/webmasters.readonly`
+     - `https://www.googleapis.com/auth/analytics.readonly`
+   - Google may say some scopes need verification. For an app only you use, skip it: you'll see "Google hasn't verified this app" when you authorize; choose **Advanced → Go to (app name)**. Unverified apps are limited to 100 users.
    - Test users: Add your email
    - **Important**: Click "Publish App" to move from Testing to Production (this prevents tokens from expiring every 7 days)
 
@@ -272,6 +280,27 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 
 **Bullet presets**: `BULLET_DISC_CIRCLE_SQUARE` (default), `BULLET_CHECKBOX`, `NUMBERED_DECIMAL_ALPHA_ROMAN`, `NUMBERED_DECIMAL_NESTED`, and more.
 
+### Search Console (read only)
+
+| Tool | Description |
+|------|-------------|
+| `list_search_console_sites` | Properties this account can see, with permission level |
+| `search_console_query` | Clicks, impressions, CTR and position by query, page, country, device or date, with filters |
+| `inspect_url` | Google's index status for one URL: indexed or not, last crawl, chosen canonical |
+| `list_sitemaps` | Submitted sitemaps with last download, warnings and errors |
+
+### Google Analytics (GA4, read only)
+
+| Tool | Description |
+|------|-------------|
+| `list_analytics_properties` | Accounts and properties with their numeric property IDs |
+| `analytics_report` | Any metrics over a date range, split by dimensions (pages, sources, countries, events), with a filter and sort |
+| `analytics_realtime` | Activity in the last 30 minutes |
+
+**IDs**: a Search Console property is written as Search Console shows it: `sc-domain:example.com` (domain property) or `https://www.example.com/` (URL property). A GA4 property ID is the number in Admin → Property details, not the `G-XXXX` measurement ID.
+
+**Adding these to an existing install**: enable the APIs and add the two scopes (step 1), deploy, then visit `/oauth/start` again and replace `GOOGLE_TOKEN_JSON` with the new token from the logs. Until then these tools say so, and every other tool keeps working on the old token.
+
 ### Utility
 
 | Tool | Description |
@@ -307,6 +336,8 @@ The server runs on port 8000 by default (or `$PORT` if set).
 |----------|----------|-------------|
 | `GOOGLE_CREDENTIALS` | Yes | OAuth client configuration JSON from Google Cloud Console |
 | `GOOGLE_TOKEN_JSON` | Yes* | User authorization token (obtained via `/oauth/start` flow) |
+| `SEARCH_CONSOLE_SITE` | No | Default Search Console property for the Search Console tools |
+| `GA4_PROPERTY_ID` | No | Default numeric GA4 property ID for the Analytics tools |
 | `PORT` | No | Server port (default: 8000) |
 
 *Not required for initial deploy - you'll add this after authorizing.
