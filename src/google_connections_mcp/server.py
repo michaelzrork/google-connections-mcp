@@ -17,12 +17,51 @@ from pydantic import BaseModel, Field, ConfigDict
 import pandas as pd
 
 from google_connections_mcp.auth_manager import get_auth_manager, create_oauth_flow
-
-# Initialize MCP server
-mcp = FastMCP("Google Connections MCP")
+from google_connections_mcp.mcp_oauth import GoogleOAuthProvider, MCP_SCOPE, public_url
+from google_connections_mcp.token_store import get_store
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 
 # Get auth manager
 auth = get_auth_manager()
+
+INSTRUCTIONS = """Google Connections: the owner's own Google account (Gmail, Calendar, Drive, Docs,
+Sheets, Tasks) plus read-only Search Console and Google Analytics.
+
+- Read before you write: look up the real ids (message, event, file, spreadsheet,
+  task list) first, and use what the tools return rather than guessing.
+- Ask before anything that sends, deletes, shares or overwrites: sending or
+  forwarding email, deleting or trashing messages, events, files, rows or tasks,
+  sharing a file, or replacing content. Say exactly what will happen.
+- Dates and times: call get_time for "today" and the owner's time zone instead of
+  assuming one.
+- Search Console: list_search_console_sites gives the site_url to use; data is
+  2-3 days behind. Google Analytics: use the numeric property ID from
+  list_analytics_properties, never the G-XXXX measurement ID. If a tool says the
+  token lacks a permission, the owner reconnects the connector to grant it.
+- Every tool returns JSON with "success"; when it's false, report the error plainly.
+"""
+
+# Sign-in for /mcp (OAuth 2.1, Google as the login; see mcp_oauth.py).
+oauth_provider = GoogleOAuthProvider(on_google_token=auth.set_credentials)
+
+# Initialize MCP server: Streamable HTTP at /mcp, stateless JSON responses (no
+# sessions to lose on a redeploy), every request needs a token from the sign-in.
+# host 0.0.0.0 so the SDK's localhost-only Host check doesn't refuse the public domain.
+mcp = FastMCP(
+    "Google Connections MCP",
+    instructions=INSTRUCTIONS,
+    auth_server_provider=oauth_provider,
+    auth=AuthSettings(
+        issuer_url=public_url(),
+        resource_server_url=public_url() + "/mcp",
+        client_registration_options=ClientRegistrationOptions(enabled=True, default_scopes=[MCP_SCOPE]),
+        revocation_options=RevocationOptions(enabled=True),
+        required_scopes=[MCP_SCOPE],
+    ),
+    host="0.0.0.0",
+    stateless_http=True,
+    json_response=True,
+)
 
 # ============================================================================
 # GET TIME TOOL
@@ -4461,7 +4500,9 @@ from starlette.responses import RedirectResponse, JSONResponse
 
 
 async def start_oauth(request: Request):
-    """Start OAuth flow"""
+    """Start the original OAuth flow (legacy; /mcp signs in on its own)"""
+    if not legacy_enabled():
+        return _legacy_gone()
     try:
         base_url = str(request.base_url).rstrip('/')
         if base_url.startswith('http://'):
@@ -4480,8 +4521,39 @@ async def start_oauth(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+def legacy_enabled() -> bool:
+    """The old unauthenticated /sse endpoint and copy-the-token /oauth/start.
+
+    On until an AI app first connects through the new sign-in at /mcp, then off
+    for good, so the open door closes by itself. LEGACY_SSE=on / off overrides.
+    """
+    flag = (os.environ.get('LEGACY_SSE') or '').strip().lower()
+    if flag in ('on', '1', 'true', 'yes'):
+        return True
+    if flag in ('off', '0', 'false', 'no'):
+        return False
+    return not get_store().connected_at()
+
+
+def _legacy_gone() -> JSONResponse:
+    return JSONResponse({
+        "error": "This endpoint is closed. Connect to /mcp instead (it signs you in with Google).",
+        "mcp_url": public_url() + "/mcp",
+    }, status_code=410)
+
+
 async def oauth_callback(request: Request):
-    """Handle OAuth callback"""
+    """Google's redirect back: the /mcp sign-in, or the old /oauth/start flow."""
+    handled = await oauth_provider.google_callback(request)
+    if handled is not None:
+        return handled
+    if not legacy_enabled():
+        return _legacy_gone()
+    return await legacy_oauth_callback(request)
+
+
+async def legacy_oauth_callback(request: Request):
+    """The original flow: prints the token for copying into GOOGLE_TOKEN_JSON"""
     try:
         code = request.query_params.get('code')
         if not code:
@@ -4516,10 +4588,14 @@ async def oauth_callback(request: Request):
 
 async def health_check(request: Request):
     """Health check endpoint"""
+    store = get_store()
     return JSONResponse({
         "status": "ok",
         "service": "Google Connections MCP",
-        "authenticated": auth.is_authenticated()
+        "authenticated": auth.is_authenticated(),
+        "mcp_url": public_url() + "/mcp",
+        "legacy_sse": legacy_enabled(),
+        "storage_persistent": store.persistent(),
     })
 
 
@@ -4527,19 +4603,20 @@ async def health_check(request: Request):
 # SERVER STARTUP
 # ============================================================================
 
-def main():
-    """Main entry point for the server."""
-    import uvicorn
+def build_app():
+    """The ASGI app: /mcp and the OAuth endpoints from the SDK, plus ours."""
     from mcp.server.sse import SseServerTransport
-    from starlette.applications import Starlette
     from starlette.routing import Route, Mount
     from starlette.responses import Response
-    
-    port = int(os.environ.get("PORT", 8000))
-    
+
+    app = mcp.streamable_http_app()  # /mcp, /authorize, /token, /register, /revoke, discovery
+
+    # The old SSE transport, unauthenticated, kept only until /mcp is in use.
     sse = SseServerTransport("/messages/")
-    
+
     async def handle_sse(request):
+        if not legacy_enabled():
+            return _legacy_gone()
         async with sse.connect_sse(
             request.scope, request.receive, request._send
         ) as streams:
@@ -4548,22 +4625,38 @@ def main():
                 mcp._mcp_server.create_initialization_options()
             )
         return Response()
-    
-    app = Starlette(
-        routes=[
-            Route("/sse", endpoint=handle_sse, methods=["GET"]),
-            Mount("/messages", app=sse.handle_post_message),
-            Route("/oauth/start", endpoint=start_oauth, methods=["GET"]),
-            Route("/oauth/callback", endpoint=oauth_callback, methods=["GET"]),
-            Route("/health", endpoint=health_check, methods=["GET"]),
-        ]
-    )
-    
+
+    async def handle_messages(scope, receive, send):
+        if not legacy_enabled():
+            await _legacy_gone()(scope, receive, send)
+            return
+        await sse.handle_post_message(scope, receive, send)
+
+    app.router.routes.extend([
+        Route("/sse", endpoint=handle_sse, methods=["GET"]),
+        Mount("/messages", app=handle_messages),
+        Route("/oauth/start", endpoint=start_oauth, methods=["GET"]),
+        Route("/oauth/callback", endpoint=oauth_callback, methods=["GET"]),
+        Route("/health", endpoint=health_check, methods=["GET"]),
+    ])
+    return app
+
+
+def main():
+    """Main entry point for the server."""
+    import uvicorn
+
+    port = int(os.environ.get("PORT", 8000))
+    app = build_app()
+    store = get_store()
+
     print(f"Starting server on port {port}")
-    print(f"OAuth available at: /oauth/start")
-    print(f"Authenticated: {auth.is_authenticated()}")
-    
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    print(f"MCP endpoint: {public_url()}/mcp (sign in with Google as OWNER_EMAIL)")
+    print(f"Legacy /sse and /oauth/start: {'ON' if legacy_enabled() else 'off'}")
+    print(f"Token store: {store.path} ({'persistent' if store.persistent() else 'NOT persistent: mount a volume and set DATA_DIR'})")
+    print(f"Google authenticated: {auth.is_authenticated()}")
+
+    uvicorn.run(app, host="0.0.0.0", port=port, proxy_headers=True, forwarded_allow_ips="*")
 
 
 if __name__ == "__main__":

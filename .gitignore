@@ -13,3 +13,8 @@ desktop.ini
 desktop.ini
 Desktop.ini
 .claude/settings.local.json
+
+# Token store (OAuth clients, tokens, Google token) when DATA_DIR is unset
+data/
+*.egg-info/
+.pytest_cache/

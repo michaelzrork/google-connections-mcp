@@ -16,10 +16,12 @@ A Model Context Protocol (MCP) server that provides AI assistants with access to
 
 ## How It Works
 
-1. You deploy this server to Railway (or similar)
+1. You deploy this server to Railway (or similar) with a small volume for its tokens
 2. You set up OAuth credentials in Google Cloud Console
-3. You authorize with your Google account once
-4. Your AI assistant connects to the server and can access your Google services
+3. You add the connector in your AI app with the `/mcp` address
+4. The app sends you to Google's sign-in. Sign in as the owner account and approve: that one step grants the Google permissions AND connects the app. Any other Google account is turned away.
+
+The MCP endpoint (`/mcp`, Streamable HTTP) needs a sign-in for every request. Behind it is an OAuth 2.1 authorization server (discovery, dynamic client registration, PKCE, rotating refresh tokens, revocation) whose login is Google, built on the MCP SDK's auth support.
 
 Each user deploys their own instance with their own credentials - your data stays yours.
 
@@ -81,61 +83,31 @@ Each user deploys their own instance with their own credentials - your data stay
 5. Go to Settings → Networking → Generate Domain (note this URL)
 6. Go back to Google Cloud and update your OAuth redirect URI with the actual Railway URL
 
-7. Add environment variables in Railway (Settings → Variables):
+7. Add a volume (the service → Settings → Volumes → Add, mount path `/data`). Tokens are kept there; without it every deploy signs your AI app out.
+
+8. Add environment variables in Railway (Settings → Variables):
    ```
    GOOGLE_CREDENTIALS = (paste the entire contents of your downloaded OAuth JSON file)
+   OWNER_EMAIL        = you@gmail.com   (the only Google account allowed to sign in)
+   DATA_DIR           = /data           (the volume's mount path)
    ```
-   
-8. Trigger a redeploy after adding the environment variable
+   The public address is read from Railway's `RAILWAY_PUBLIC_DOMAIN`; set `PUBLIC_URL` if you use a custom domain.
 
-### 3. Authorize Your Google Account
+9. Trigger a redeploy after adding the variables
 
-1. Visit `https://your-railway-url/oauth/start` in your browser
-2. Sign in with Google and grant permissions
-3. You'll see a success message
-4. Check Railway logs - you'll see the token JSON printed there
-5. **Important: Format the token correctly** (see below)
-6. Add it as environment variable: `GOOGLE_TOKEN_JSON`
-7. Redeploy one more time
+### 3. Connect your AI app
 
-#### Formatting the Token JSON
+**Claude:** Settings → Connectors → Add custom connector, URL `https://your-railway-url/mcp`. Claude opens Google's sign-in: sign in as `OWNER_EMAIL` and approve. (Unverified app? Choose **Advanced → Go to (app name)**.)
 
-Railway logs wrap the token in extra metadata. You need to extract just the token data.
+**ChatGPT** (website): Settings → Apps & Connectors → add a custom MCP server with the same URL, Authentication **OAuth**.
 
-**What Railway logs show:**
-```json
-{
-  "message": "",
-  "attributes": {
-    "token": "ya29.a0ARrdaM...",
-    "refresh_token": "1//0eXy...",
-    "token_uri": "https://oauth2.googleapis.com/token",
-    "client_id": "12345...apps.googleusercontent.com",
-    "client_secret": "GOCSPX-...",
-    "scopes": ["https://www.googleapis.com/auth/calendar", ...],
-    "expiry": "2025-12-15T12:00:00Z"
-  },
-  "tags": { ... },
-  "timestamp": "2025-12-15T..."
-}
-```
+To grant new Google permissions later (after a scope is added to `oauth_config.py`), reconnect the connector: the sign-in asks for them.
 
-**What you need to paste (extract from `attributes`):**
-```json
-{"token": "ya29.a0ARrdaM...", "refresh_token": "1//0eXy...", "token_uri": "https://oauth2.googleapis.com/token", "client_id": "12345...apps.googleusercontent.com", "client_secret": "GOCSPX-...", "scopes": ["https://www.googleapis.com/auth/calendar", ...], "expiry": "2025-12-15T12:00:00Z"}
-```
+You're done!
 
-**Quick method:** Copy the Railway log output, paste it to Claude or ChatGPT, and ask: "Extract just the token JSON from this Railway log output and format it on one line."
+### Moving from the old `/sse` setup
 
-
-### 4. Connect to Claude
-
-1. In Claude.ai, go to Settings → Connections
-2. Add a new MCP connection:
-   - URL: `https://your-railway-url/sse`
-3. The connection should show as active
-
-You're done! Claude can now access your Google services.
+Older installs connected to `/sse` with no sign-in, using a `GOOGLE_TOKEN_JSON` copied from the logs. Both keep working until an AI app first connects through `/mcp`; after that `/sse`, `/messages` and `/oauth/start` answer **410 Gone** for good, because `/sse` lets anyone with the URL use your Google account. Steps: add the volume and `OWNER_EMAIL`/`DATA_DIR`, deploy, then replace the connector's URL with `/mcp` and sign in. `GOOGLE_TOKEN_JSON` can be deleted once that works (the sign-in saves its own token). `LEGACY_SSE=on` or `off` overrides the automatic switch.
 
 ## Available Tools
 
@@ -335,22 +307,27 @@ The server runs on port 8000 by default (or `$PORT` if set).
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `GOOGLE_CREDENTIALS` | Yes | OAuth client configuration JSON from Google Cloud Console |
-| `GOOGLE_TOKEN_JSON` | Yes* | User authorization token (obtained via `/oauth/start` flow) |
+| `OWNER_EMAIL` | Yes | The Google account allowed to sign in; everyone else is refused |
+| `DATA_DIR` | Yes* | Where tokens are kept: a mounted volume, e.g. `/data` |
+| `PUBLIC_URL` | No | This server's public address; defaults to `https://$RAILWAY_PUBLIC_DOMAIN` |
+| `GOOGLE_TOKEN_JSON` | No | Old setup only: a token copied from the logs. Used when the sign-in hasn't saved one |
+| `LEGACY_SSE` | No | `on` / `off` to force the old `/sse` endpoint; by default it closes after the first `/mcp` connection |
 | `SEARCH_CONSOLE_SITE` | No | Default Search Console property for the Search Console tools |
 | `GA4_PROPERTY_ID` | No | Default numeric GA4 property ID for the Analytics tools |
 | `PORT` | No | Server port (default: 8000) |
 
-*Not required for initial deploy - you'll add this after authorizing.
+*Without a volume the server still runs, but tokens are lost on every deploy and the AI app has to sign in again.
 
 ## Endpoints
 
 | Endpoint | Description |
 |----------|-------------|
-| `/sse` | MCP SSE connection endpoint (what Claude connects to) |
-| `/messages/` | MCP message handling |
-| `/oauth/start` | Begin OAuth authorization flow |
-| `/oauth/callback` | OAuth callback handler |
-| `/health` | Health check (returns auth status) |
+| `/mcp` | MCP endpoint (Streamable HTTP, sign-in required): what your AI app connects to |
+| `/.well-known/oauth-protected-resource/mcp`, `/.well-known/oauth-authorization-server` | OAuth discovery |
+| `/register`, `/authorize`, `/token`, `/revoke` | OAuth 2.1: client registration, sign-in, tokens, revocation |
+| `/oauth/callback` | Google's redirect back after sign-in |
+| `/health` | Status: Google signed in, the `/mcp` address, whether the old endpoints are open, whether storage is persistent |
+| `/sse`, `/messages/`, `/oauth/start` | Old setup, open until the first `/mcp` connection, then 410 |
 
 ## Troubleshooting
 
@@ -359,7 +336,9 @@ Make sure you've published your OAuth app to Production in Google Cloud Console.
 
 ### Can't connect from Claude
 - Check that your Railway deployment is running (`/health` endpoint should return `{"status": "ok"}`)
-- Verify the URL is correct (should end in `/sse`)
+- Verify the URL ends in `/mcp`
+- "This server belongs to someone else": you signed in with a Google account other than `OWNER_EMAIL`
+- Signed out after every deploy: the volume isn't mounted, or `DATA_DIR` doesn't point at it (`/health` shows `storage_persistent`)
 - Check Railway logs for errors
 
 ### OAuth callback fails
@@ -377,7 +356,8 @@ This server uses:
 - [gspread](https://github.com/burnash/gspread) for Google Sheets
 - [google-api-python-client](https://github.com/googleapis/google-api-python-client) for other Google APIs
 - [PyMuPDF](https://pymupdf.readthedocs.io/) for PDF text extraction
-- [Starlette](https://www.starlette.io/) for HTTP/SSE transport
+- [Starlette](https://www.starlette.io/) for HTTP transport
+- The MCP SDK's OAuth support (`mcp.server.auth`) with Google as the login: `mcp_oauth.py`, tokens in `token_store.py`
 - [uv](https://github.com/astral-sh/uv) for fast dependency management
 
 ## Known Limitations

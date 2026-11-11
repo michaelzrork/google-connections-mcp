@@ -12,6 +12,7 @@ from googleapiclient.discovery import build
 import gspread
 
 from google_connections_mcp.oauth_config import ALL_SCOPES
+from google_connections_mcp.token_store import get_store
 
 
 class GoogleAuthManager:
@@ -22,8 +23,10 @@ class GoogleAuthManager:
         self._load_credentials()
     
     def _load_credentials(self):
-        """Load credentials from environment variable"""
-        token_json = os.environ.get('GOOGLE_TOKEN_JSON')
+        """Load the Google token: the one the sign-in saved (token store) first,
+        then the GOOGLE_TOKEN_JSON variable (the old copy-from-the-logs setup)."""
+        stored = get_store().google_token()
+        token_json = json.dumps(stored) if stored else os.environ.get('GOOGLE_TOKEN_JSON')
         if token_json:
             try:
                 creds_info = json.loads(token_json)
@@ -47,11 +50,13 @@ class GoogleAuthManager:
         if self.credentials and self.credentials.expired and self.credentials.refresh_token:
             try:
                 self.credentials.refresh(GoogleRequest())
-                # Print refreshed token so user can update Railway
-                print("="*60)
-                print("TOKEN REFRESHED - UPDATE GOOGLE_TOKEN_JSON:")
-                print(self.credentials.to_json())
-                print("="*60)
+                # Keep the refreshed token in the store (it survives restarts
+                # when DATA_DIR is a volume). It used to be printed to the
+                # logs for copying into GOOGLE_TOKEN_JSON; no longer needed.
+                try:
+                    get_store().set_google_token(json.loads(self.credentials.to_json()))
+                except Exception as e:
+                    print(f"Could not save refreshed token: {e}")
                 return True
             except Exception as e:
                 print(f"Error refreshing token: {e}")
@@ -65,6 +70,11 @@ class GoogleAuthManager:
                 raise Exception("No valid credentials. Visit /oauth/start to authorize")
         return self.credentials
     
+    def set_credentials(self, credentials):
+        """Install a Google token from the sign-in and keep it in the store."""
+        self.credentials = credentials
+        get_store().set_google_token(json.loads(credentials.to_json()))
+
     def is_authenticated(self):
         """Check if we have valid credentials"""
         try:
