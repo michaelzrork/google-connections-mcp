@@ -13,6 +13,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, ConfigDict
 import pandas as pd
 
@@ -34,9 +35,9 @@ Sheets, Tasks) plus read-only Search Console and Google Analytics.
   sharing a file, or replacing content. Say exactly what will happen.
 - Dates and times: call get_time for "today" and the owner's time zone instead of
   assuming one.
-- Search Console: list_search_console_sites gives the site_url to use; data is
+- Search Console: search_console_list_sites gives the site_url to use; data is
   2-3 days behind. Google Analytics: use the numeric property ID from
-  list_analytics_properties, never the G-XXXX measurement ID. If a tool says the
+  analytics_list_properties, never the G-XXXX measurement ID. If a tool says the
   token lacks a permission, the owner reconnects the connector to grant it.
 - Every tool returns JSON with "success"; when it's false, report the error plainly.
 """
@@ -69,6 +70,8 @@ mcp = FastMCP(
 
 @mcp.tool(
     name="get_time",
+    title="Utility: Get Time",
+    annotations=ToolAnnotations(readOnlyHint=True),
     description="Returns the current date, time, and day of week for the specified timezone. Requires IANA timezone format (e.g., 'America/New_York', 'Europe/London', 'Asia/Tokyo', 'UTC'). If user's timezone is unknown, ask them."
 )
 async def get_time(timezone: str) -> dict:
@@ -176,7 +179,7 @@ def _resolve_row_id(worksheet, obj: Dict[str, Any], mode: str) -> int:
     if len(matches) > 1:
         raise ValueError(
             f"Multiple matches for {obj['unique_id_column']}='{obj['unique_id_value']}': "
-            f"rows {matches}. Use query_sheet or get_row to identify the correct row, "
+            f"rows {matches}. Use sheets_query or sheets_get_row to identify the correct row, "
             f"then retry with explicit row number."
         )
     return matches[0]
@@ -244,7 +247,7 @@ class QuerySheetInput(BaseModel):
     sort_by: Optional[str] = Field(default=None)
     sort_desc: bool = Field(default=False)
 
-@mcp.tool(name="query_sheet")
+@mcp.tool(name="sheets_query", title="Sheets: Query", annotations=ToolAnnotations(readOnlyHint=True))
 async def query_sheet(params: QuerySheetInput) -> str:
     """
     Query a Google Sheet with flexible filtering. Returns matching rows with _row_number.
@@ -389,7 +392,7 @@ class FindRowByUniqueIdInput(BaseModel):
     mode: str = Field(default="header", description="'header' or 'letter'")
     lookups: List[Dict[str, str]] = Field(..., min_length=1, description="Array of {column, value}")
 
-@mcp.tool(name="find_row_by_unique_id")
+@mcp.tool(name="sheets_find_row", title="Sheets: Find Row", annotations=ToolAnnotations(readOnlyHint=True))
 async def find_row_by_unique_id(params: FindRowByUniqueIdInput) -> str:
     """
     Look up row number(s) by searching for a value in a column.
@@ -437,7 +440,7 @@ class GetRowInput(BaseModel):
     unique_id_mode: Optional[str] = Field(default="header", description="'header' or 'letter' for unique_id lookups")
     rows: List[Dict[str, Any]] = Field(..., min_length=1, description="Array of {row} or {unique_id_column, unique_id_value}")
 
-@mcp.tool(name="get_row")
+@mcp.tool(name="sheets_get_row", title="Sheets: Get Row", annotations=ToolAnnotations(readOnlyHint=True))
 async def get_row(params: GetRowInput) -> str:
     """
     Get one or more complete rows by row number or unique_id lookup.
@@ -485,7 +488,7 @@ class GetCellInput(BaseModel):
     worksheet_name: str = Field(..., min_length=1)
     cells: List[str] = Field(..., min_length=1, description="Array of A1 cell refs, e.g. ['A1', 'B5']")
 
-@mcp.tool(name="get_cell")
+@mcp.tool(name="sheets_get_cell", title="Sheets: Get Cell", annotations=ToolAnnotations(readOnlyHint=True))
 async def get_cell(params: GetCellInput) -> str:
     """Get one or more cell values by A1 notation."""
     try:
@@ -518,13 +521,13 @@ class GetColumnInput(BaseModel):
     skip_header: bool = Field(default=True, description="Skip row 1 (header row)")
     skip_empty: bool = Field(default=False, description="Exclude empty cells from results")
 
-@mcp.tool(name="get_column")
+@mcp.tool(name="sheets_get_column", title="Sheets: Get Column", annotations=ToolAnnotations(readOnlyHint=True))
 async def get_column(params: GetColumnInput) -> str:
     """
     Get all values in a column. Returns column letter and values with row numbers.
 
-    Useful for seeing all values in a column, then using update_cells to modify them.
-    Example: get_column returns column "B", then update with {"B2": "new", "B5": "other"}
+    Useful for seeing all values in a column, then using sheets_update_cells to modify them.
+    Example: sheets_get_column returns column "B", then update with {"B2": "new", "B5": "other"}
     """
     try:
         ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
@@ -569,7 +572,7 @@ class UpdateCellsInput(BaseModel):
     worksheet_name: str = Field(..., min_length=1)
     updates: Dict[str, Any] = Field(..., description="Object of {cell_ref: value}, e.g. {'A16': 'hello', 'C16': 42}")
 
-@mcp.tool(name="update_cells")
+@mcp.tool(name="sheets_update_cells", title="Sheets: Update Cells")
 async def update_cells(params: UpdateCellsInput) -> str:
     """
     Update one or more cells by A1 notation. Core write primitive.
@@ -595,7 +598,7 @@ class UpdateRowInput(BaseModel):
     mode: str = Field(default="header", description="'header' or 'letter'")
     updates: List[Dict[str, Any]] = Field(..., min_length=1)
 
-@mcp.tool(name="update_row")
+@mcp.tool(name="sheets_update_row", title="Sheets: Update Row")
 async def update_row(params: UpdateRowInput) -> str:
     """
     Update one or more existing rows. Each update object must have either
@@ -654,7 +657,7 @@ class AddRowInput(BaseModel):
     mode: str = Field(default="header", description="'header' or 'letter'")
     rows: List[Dict[str, Any]] = Field(..., min_length=1)
 
-@mcp.tool(name="add_row")
+@mcp.tool(name="sheets_add_row", title="Sheets: Add Row")
 async def add_row(params: AddRowInput) -> str:
     """
     Add one or more new rows to the next empty row(s).
@@ -701,11 +704,11 @@ class InsertRowInput(BaseModel):
     mode: str = Field(default="header", description="'header' or 'letter' for data keys")
 
 
-@mcp.tool(name="insert_row")
+@mcp.tool(name="sheets_insert_row", title="Sheets: Insert Row")
 async def insert_row(params: InsertRowInput) -> str:
     """
     Insert a new row at a specific position, shifting existing rows down.
-    Unlike add_row which appends to the end, this inserts and shifts.
+    Unlike sheets_add_row which appends to the end, this inserts and shifts.
     """
     try:
         ws = _get_worksheet(params.spreadsheet_id, params.worksheet_name)
@@ -742,7 +745,7 @@ class DeleteRowInput(BaseModel):
     unique_id_mode: Optional[str] = Field(default="header", description="'header' or 'letter' for unique_id lookups")
     deletions: List[Dict[str, Any]] = Field(..., min_length=1, description="Array of {row} or {unique_id_column, unique_id_value}")
 
-@mcp.tool(name="delete_row")
+@mcp.tool(name="sheets_delete_row", title="Sheets: Delete Row")
 async def delete_row(params: DeleteRowInput) -> str:
     """
     Delete one or more rows by row number or unique_id lookup.
@@ -790,7 +793,7 @@ class InsertColumnInput(BaseModel):
     mode: str = Field(default="letter", description="'header' to find by header name, 'letter' for column letter")
 
 
-@mcp.tool(name="insert_column")
+@mcp.tool(name="sheets_insert_column", title="Sheets: Insert Column")
 async def insert_column(params: InsertColumnInput) -> str:
     """
     Insert a new column.
@@ -856,7 +859,7 @@ class DeleteColumnInput(BaseModel):
     mode: str = Field(default="header", description="'header' or 'letter'")
     column: str = Field(..., min_length=1, description="Header name or column letter")
 
-@mcp.tool(name="delete_column")
+@mcp.tool(name="sheets_delete_column", title="Sheets: Delete Column")
 async def delete_column(params: DeleteColumnInput) -> str:
     """Delete a column by header name or letter."""
     try:
@@ -881,7 +884,7 @@ class CreateSpreadsheetInput(BaseModel):
     title: str = Field(..., min_length=1)
     worksheets: Optional[List[str]] = Field(default=None, description="Optional list of worksheet names to create")
 
-@mcp.tool(name="create_spreadsheet")
+@mcp.tool(name="sheets_create_spreadsheet", title="Sheets: Create Spreadsheet")
 async def create_spreadsheet(params: CreateSpreadsheetInput) -> str:
     """Create a new Google Sheets document."""
     try:
@@ -908,7 +911,7 @@ async def create_spreadsheet(params: CreateSpreadsheetInput) -> str:
 
 # --- add_worksheet ---
 
-@mcp.tool(name="add_worksheet")
+@mcp.tool(name="sheets_add_worksheet", title="Sheets: Add Worksheet")
 async def add_worksheet(spreadsheet_id: str, title: str) -> str:
     """Add a new worksheet (tab) to an existing spreadsheet."""
     try:
@@ -924,7 +927,7 @@ async def add_worksheet(spreadsheet_id: str, title: str) -> str:
 
 # --- delete_worksheet ---
 
-@mcp.tool(name="delete_worksheet")
+@mcp.tool(name="sheets_delete_worksheet", title="Sheets: Delete Worksheet")
 async def delete_worksheet(spreadsheet_id: str, worksheet_name: str) -> str:
     """Delete a worksheet (tab) from a spreadsheet."""
     try:
@@ -941,7 +944,7 @@ async def delete_worksheet(spreadsheet_id: str, worksheet_name: str) -> str:
 
 # --- list_worksheets ---
 
-@mcp.tool(name="list_worksheets")
+@mcp.tool(name="sheets_list_worksheets", title="Sheets: List Worksheets", annotations=ToolAnnotations(readOnlyHint=True))
 async def list_worksheets(spreadsheet_id: str) -> str:
     """List all worksheets (tabs) in a spreadsheet with their properties."""
     try:
@@ -971,7 +974,7 @@ async def list_worksheets(spreadsheet_id: str) -> str:
 
 # --- rename_worksheet ---
 
-@mcp.tool(name="rename_worksheet")
+@mcp.tool(name="sheets_rename_worksheet", title="Sheets: Rename Worksheet")
 async def rename_worksheet(spreadsheet_id: str, current_name: str, new_name: str) -> str:
     """Rename a worksheet (tab) in a spreadsheet."""
     try:
@@ -992,7 +995,7 @@ async def rename_worksheet(spreadsheet_id: str, current_name: str, new_name: str
 
 # --- get_spreadsheet_info ---
 
-@mcp.tool(name="get_spreadsheet_info")
+@mcp.tool(name="sheets_get_spreadsheet_info", title="Sheets: Get Spreadsheet Info", annotations=ToolAnnotations(readOnlyHint=True))
 async def get_spreadsheet_info(spreadsheet_id: str) -> str:
     """Get metadata about a spreadsheet including title, URL, and all worksheets."""
     try:
@@ -1032,7 +1035,7 @@ class ClearRangeInput(BaseModel):
     worksheet_name: str = Field(..., min_length=1)
     range: str = Field(..., min_length=1, description="A1 notation range, e.g. 'A2:D10' or 'B:B' for entire column")
 
-@mcp.tool(name="clear_range")
+@mcp.tool(name="sheets_clear_range", title="Sheets: Clear Range")
 async def clear_range(params: ClearRangeInput) -> str:
     """
     Clear cell contents in a range without deleting rows/columns.
@@ -1063,7 +1066,7 @@ class SortWorksheetParams(BaseModel):
     mode: str = Field(default="header", description="'header' to use column names, 'letter' to use column letters")
 
 
-@mcp.tool(name="sort_worksheet")
+@mcp.tool(name="sheets_sort_worksheet", title="Sheets: Sort Worksheet")
 async def sort_worksheet(params: SortWorksheetParams) -> str:
     """
     Sort an entire worksheet by a column.
@@ -1109,7 +1112,7 @@ class CopyWorksheetParams(BaseModel):
     new_worksheet_name: str = Field(default=None, description="Name for the copied worksheet (auto-generated if not specified)")
 
 
-@mcp.tool(name="copy_worksheet")
+@mcp.tool(name="sheets_copy_worksheet", title="Sheets: Copy Worksheet")
 async def copy_worksheet(params: CopyWorksheetParams) -> str:
     """
     Copy a worksheet to the same or a different spreadsheet.
@@ -1166,7 +1169,7 @@ class MergeCellsParams(BaseModel):
     merge_type: str = Field(default="MERGE_ALL", description="'MERGE_ALL' (single cell), 'MERGE_COLUMNS' (merge within columns), 'MERGE_ROWS' (merge within rows)")
 
 
-@mcp.tool(name="merge_cells")
+@mcp.tool(name="sheets_merge_cells", title="Sheets: Merge Cells")
 async def merge_cells(params: MergeCellsParams) -> str:
     """
     Merge a range of cells into one.
@@ -1193,7 +1196,7 @@ class UnmergeCellsParams(BaseModel):
     range: str = Field(description="Range to unmerge in A1 notation (e.g., 'A1:C1')")
 
 
-@mcp.tool(name="unmerge_cells")
+@mcp.tool(name="sheets_unmerge_cells", title="Sheets: Unmerge Cells")
 async def unmerge_cells(params: UnmergeCellsParams) -> str:
     """
     Unmerge previously merged cells.
@@ -1219,7 +1222,7 @@ class FreezeParams(BaseModel):
     cols: int = Field(default=0, description="Number of columns to freeze from the left (0 to unfreeze)")
 
 
-@mcp.tool(name="freeze_rows_columns")
+@mcp.tool(name="sheets_freeze_rows_columns", title="Sheets: Freeze Rows Columns")
 async def freeze_rows_columns(params: FreezeParams) -> str:
     """
     Freeze rows and/or columns in a worksheet.
@@ -1244,7 +1247,7 @@ async def freeze_rows_columns(params: FreezeParams) -> str:
 # GOOGLE CALENDAR TOOLS
 # ============================================================================
 
-@mcp.tool(name="list_calendars")
+@mcp.tool(name="calendar_list_calendars", title="Calendar: List Calendars", annotations=ToolAnnotations(readOnlyHint=True))
 async def list_calendars(page_token: str = None) -> str:
     """List all available calendars"""
     try:
@@ -1260,7 +1263,7 @@ async def list_calendars(page_token: str = None) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="list_calendar_events")
+@mcp.tool(name="calendar_list_events", title="Calendar: List Events", annotations=ToolAnnotations(readOnlyHint=True))
 async def list_calendar_events(
     calendar_id: str = "primary",
     time_min: str = None,
@@ -1347,7 +1350,7 @@ async def list_calendar_events(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="get_calendar_event")
+@mcp.tool(name="calendar_get_event", title="Calendar: Get Event", annotations=ToolAnnotations(readOnlyHint=True))
 async def get_calendar_event(calendar_id: str, event_id: str) -> str:
     """Get a specific calendar event"""
     try:
@@ -1359,7 +1362,7 @@ async def get_calendar_event(calendar_id: str, event_id: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="create_calendar_event")
+@mcp.tool(name="calendar_create_event", title="Calendar: Create Event")
 async def create_calendar_event(
     calendar_id: str,
     summary: str,
@@ -1414,7 +1417,7 @@ async def create_calendar_event(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="update_calendar_event")
+@mcp.tool(name="calendar_update_event", title="Calendar: Update Event")
 async def update_calendar_event(
     calendar_id: str,
     event_id: str,
@@ -1468,7 +1471,7 @@ async def update_calendar_event(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="delete_calendar_event")
+@mcp.tool(name="calendar_delete_event", title="Calendar: Delete Event")
 async def delete_calendar_event(calendar_id: str, event_id: str) -> str:
     """Delete a calendar event"""
     try:
@@ -1585,7 +1588,7 @@ def _get_attachment_info(payload: dict) -> list:
 # GMAIL TOOLS
 # ============================================================================
 
-@mcp.tool(name="list_gmail_messages")
+@mcp.tool(name="gmail_list_messages", title="Gmail: List Messages", annotations=ToolAnnotations(readOnlyHint=True))
 async def list_gmail_messages(
     query: str = None,
     max_results: int = 10,
@@ -1678,7 +1681,7 @@ async def list_gmail_messages(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="get_gmail_message")
+@mcp.tool(name="gmail_get_message", title="Gmail: Get Message", annotations=ToolAnnotations(readOnlyHint=True))
 async def get_gmail_message(
     message_id: str,
     include_attachments: bool = True
@@ -1734,7 +1737,7 @@ async def get_gmail_message(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="send_gmail_message")
+@mcp.tool(name="gmail_send_message", title="Gmail: Send Message")
 async def send_gmail_message(
     to: str,
     subject: str,
@@ -1772,7 +1775,7 @@ async def send_gmail_message(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="get_gmail_thread")
+@mcp.tool(name="gmail_get_thread", title="Gmail: Get Thread", annotations=ToolAnnotations(readOnlyHint=True))
 async def get_gmail_thread(thread_id: str, max_messages: int = 20) -> str:
     """
     Get all messages in a Gmail thread (conversation).
@@ -1816,7 +1819,7 @@ async def get_gmail_thread(thread_id: str, max_messages: int = 20) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="get_gmail_attachment")
+@mcp.tool(name="gmail_get_attachment", title="Gmail: Get Attachment", annotations=ToolAnnotations(readOnlyHint=True))
 async def get_gmail_attachment(message_id: str, attachment_id: str) -> str:
     """
     Get attachment data from a Gmail message.
@@ -1825,7 +1828,7 @@ async def get_gmail_attachment(message_id: str, attachment_id: str) -> str:
 
     Args:
         message_id: The Gmail message ID
-        attachment_id: The attachment ID (from get_gmail_message response)
+        attachment_id: The attachment ID (from gmail_get_message response)
     """
     try:
         service = auth.get_gmail_service()
@@ -1845,7 +1848,7 @@ async def get_gmail_attachment(message_id: str, attachment_id: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="reply_to_gmail")
+@mcp.tool(name="gmail_reply", title="Gmail: Reply")
 async def reply_to_gmail(
     message_id: str,
     body: str,
@@ -1930,7 +1933,7 @@ async def reply_to_gmail(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="forward_gmail")
+@mcp.tool(name="gmail_forward", title="Gmail: Forward")
 async def forward_gmail(
     message_id: str,
     to: str,
@@ -1993,7 +1996,7 @@ async def forward_gmail(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="count_gmail_messages")
+@mcp.tool(name="gmail_count_messages", title="Gmail: Count Messages", annotations=ToolAnnotations(readOnlyHint=True))
 async def count_gmail_messages(query: str = None) -> str:
     """
     Count Gmail messages matching a query.
@@ -2049,7 +2052,7 @@ async def count_gmail_messages(query: str = None) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="get_gmail_profile")
+@mcp.tool(name="gmail_get_profile", title="Gmail: Get Profile", annotations=ToolAnnotations(readOnlyHint=True))
 async def get_gmail_profile() -> str:
     """
     Get the authenticated user's Gmail profile information.
@@ -2076,7 +2079,7 @@ async def get_gmail_profile() -> str:
 # GMAIL MANAGEMENT TOOLS
 # ============================================================================
 
-@mcp.tool(name="modify_gmail_message")
+@mcp.tool(name="gmail_modify_message", title="Gmail: Modify Message")
 async def modify_gmail_message(
     message_id: str,
     add_labels: List[str] = None,
@@ -2111,7 +2114,7 @@ async def modify_gmail_message(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="batch_modify_gmail")
+@mcp.tool(name="gmail_batch_modify", title="Gmail: Batch Modify")
 async def batch_modify_gmail(
     message_ids: List[str],
     add_labels: List[str] = None,
@@ -2141,7 +2144,7 @@ async def batch_modify_gmail(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="list_gmail_labels")
+@mcp.tool(name="gmail_list_labels", title="Gmail: List Labels", annotations=ToolAnnotations(readOnlyHint=True))
 async def list_gmail_labels() -> str:
     """List all Gmail labels"""
     try:
@@ -2158,7 +2161,7 @@ async def list_gmail_labels() -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="create_gmail_label")
+@mcp.tool(name="gmail_create_label", title="Gmail: Create Label")
 async def create_gmail_label(
     name: str,
     label_list_visibility: str = "labelShow",
@@ -2188,49 +2191,49 @@ async def create_gmail_label(
 
 
 # Gmail helper functions
-@mcp.tool(name="mark_gmail_read")
+@mcp.tool(name="gmail_mark_read", title="Gmail: Mark Read")
 async def mark_gmail_read(message_ids: List[str]) -> str:
     """Mark one or more Gmail messages as read"""
     return await batch_modify_gmail(message_ids=message_ids, remove_labels=['UNREAD'])
 
 
-@mcp.tool(name="mark_gmail_unread")
+@mcp.tool(name="gmail_mark_unread", title="Gmail: Mark Unread")
 async def mark_gmail_unread(message_ids: List[str]) -> str:
     """Mark one or more Gmail messages as unread"""
     return await batch_modify_gmail(message_ids=message_ids, add_labels=['UNREAD'])
 
 
-@mcp.tool(name="star_gmail")
+@mcp.tool(name="gmail_star", title="Gmail: Star")
 async def star_gmail(message_ids: List[str]) -> str:
     """Star one or more Gmail messages"""
     return await batch_modify_gmail(message_ids=message_ids, add_labels=['STARRED'])
 
 
-@mcp.tool(name="unstar_gmail")
+@mcp.tool(name="gmail_unstar", title="Gmail: Unstar")
 async def unstar_gmail(message_ids: List[str]) -> str:
     """Remove star from one or more Gmail messages"""
     return await batch_modify_gmail(message_ids=message_ids, remove_labels=['STARRED'])
 
 
-@mcp.tool(name="archive_gmail")
+@mcp.tool(name="gmail_archive", title="Gmail: Archive")
 async def archive_gmail(message_ids: List[str]) -> str:
     """Archive one or more Gmail messages"""
     return await batch_modify_gmail(message_ids=message_ids, remove_labels=['INBOX'])
 
 
-@mcp.tool(name="move_to_inbox")
+@mcp.tool(name="gmail_move_to_inbox", title="Gmail: Move to Inbox")
 async def move_to_inbox(message_ids: List[str]) -> str:
     """Move one or more Gmail messages to inbox"""
     return await batch_modify_gmail(message_ids=message_ids, add_labels=['INBOX'])
 
 
-@mcp.tool(name="trash_gmail")
+@mcp.tool(name="gmail_trash", title="Gmail: Trash")
 async def trash_gmail(message_ids: List[str]) -> str:
     """Move one or more Gmail messages to trash"""
     return await batch_modify_gmail(message_ids=message_ids, add_labels=['TRASH'])
 
 
-@mcp.tool(name="spam_gmail")
+@mcp.tool(name="gmail_mark_spam", title="Gmail: Mark Spam")
 async def spam_gmail(message_ids: List[str]) -> str:
     """Mark one or more Gmail messages as spam"""
     return await batch_modify_gmail(message_ids=message_ids, add_labels=['SPAM'], remove_labels=['INBOX'])
@@ -2240,7 +2243,7 @@ async def spam_gmail(message_ids: List[str]) -> str:
 # GOOGLE TASKS TOOLS
 # ============================================================================
 
-@mcp.tool(name="list_task_lists")
+@mcp.tool(name="tasks_list_task_lists", title="Tasks: List Task Lists", annotations=ToolAnnotations(readOnlyHint=True))
 async def list_task_lists() -> str:
     """List all Google Tasks task lists"""
     try:
@@ -2257,7 +2260,7 @@ async def list_task_lists() -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="create_task_list")
+@mcp.tool(name="tasks_create_task_list", title="Tasks: Create Task List")
 async def create_task_list(title: str) -> str:
     """Create a new Google Tasks task list"""
     try:
@@ -2272,7 +2275,7 @@ async def create_task_list(title: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="delete_task_list")
+@mcp.tool(name="tasks_delete_task_list", title="Tasks: Delete Task List")
 async def delete_task_list(task_list_id: str) -> str:
     """Delete a Google Tasks task list"""
     try:
@@ -2287,7 +2290,7 @@ async def delete_task_list(task_list_id: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="update_task_list")
+@mcp.tool(name="tasks_update_task_list", title="Tasks: Update Task List")
 async def update_task_list(task_list_id: str, title: str) -> str:
     """Rename a Google Tasks task list"""
     try:
@@ -2304,7 +2307,7 @@ async def update_task_list(task_list_id: str, title: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="list_tasks")
+@mcp.tool(name="tasks_list_tasks", title="Tasks: List Tasks", annotations=ToolAnnotations(readOnlyHint=True))
 async def list_tasks(
     task_list_id: str = "@default",
     show_completed: bool = False,
@@ -2337,7 +2340,7 @@ async def list_tasks(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="get_task")
+@mcp.tool(name="tasks_get_task", title="Tasks: Get Task", annotations=ToolAnnotations(readOnlyHint=True))
 async def get_task(task_list_id: str, task_id: str) -> str:
     """Get a specific Google Task"""
     try:
@@ -2349,7 +2352,7 @@ async def get_task(task_list_id: str, task_id: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="create_task")
+@mcp.tool(name="tasks_create_task", title="Tasks: Create Task")
 async def create_task(
     title: str,
     task_list_id: str = "@default",
@@ -2379,7 +2382,7 @@ async def create_task(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="update_task")
+@mcp.tool(name="tasks_update_task", title="Tasks: Update Task")
 async def update_task(
     task_list_id: str,
     task_id: str,
@@ -2413,7 +2416,7 @@ async def update_task(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="complete_task")
+@mcp.tool(name="tasks_complete_task", title="Tasks: Complete Task")
 async def complete_task(task_list_id: str, task_id: str) -> str:
     """Mark a Google Task as completed"""
     try:
@@ -2427,7 +2430,7 @@ async def complete_task(task_list_id: str, task_id: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="delete_task")
+@mcp.tool(name="tasks_delete_task", title="Tasks: Delete Task")
 async def delete_task(task_list_id: str, task_id: str) -> str:
     """Delete a Google Task"""
     try:
@@ -2442,7 +2445,7 @@ async def delete_task(task_list_id: str, task_id: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="clear_completed_tasks")
+@mcp.tool(name="tasks_clear_completed", title="Tasks: Clear Completed")
 async def clear_completed_tasks(task_list_id: str = "@default") -> str:
     """Clear all completed tasks from a task list"""
     try:
@@ -2457,7 +2460,7 @@ async def clear_completed_tasks(task_list_id: str = "@default") -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="move_task_to_list")
+@mcp.tool(name="tasks_move_task_to_list", title="Tasks: Move Task to List")
 async def move_task_to_list(task_id: str, source_list_id: str, destination_list_id: str) -> str:
     """Move a task between lists"""
     try:
@@ -2483,7 +2486,7 @@ async def move_task_to_list(task_id: str, source_list_id: str, destination_list_
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="star_task")
+@mcp.tool(name="tasks_star_task", title="Tasks: Star Task")
 async def star_task(task_list_id: str, task_id: str) -> str:
     """Star a Google Task"""
     try:
@@ -2499,7 +2502,7 @@ async def star_task(task_list_id: str, task_id: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="unstar_task")
+@mcp.tool(name="tasks_unstar_task", title="Tasks: Unstar Task")
 async def unstar_task(task_list_id: str, task_id: str) -> str:
     """Unstar a Google Task"""
     try:
@@ -2519,7 +2522,7 @@ async def unstar_task(task_list_id: str, task_id: str) -> str:
 # GOOGLE DRIVE TOOLS
 # ============================================================================
 
-@mcp.tool(name="list_folder")
+@mcp.tool(name="drive_list_folder", title="Drive: List Folder", annotations=ToolAnnotations(readOnlyHint=True))
 async def list_folder(folder_id: str = "root", max_results: int = 100, page_token: str = None) -> str:
     """List contents of a Drive folder. Use 'root' for My Drive."""
     try:
@@ -2538,7 +2541,7 @@ async def list_folder(folder_id: str = "root", max_results: int = 100, page_toke
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="create_folder")
+@mcp.tool(name="drive_create_folder", title="Drive: Create Folder")
 async def create_folder(name: str, parent_folder_id: str = None) -> str:
     """Create a new folder in Google Drive. Creates in root if no parent specified."""
     try:
@@ -2552,7 +2555,7 @@ async def create_folder(name: str, parent_folder_id: str = None) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="move_file")
+@mcp.tool(name="drive_move_file", title="Drive: Move File")
 async def move_file(file_id: str, destination_folder_id: str) -> str:
     """Move a file to a different folder. Removes from current parent(s)."""
     try:
@@ -2566,7 +2569,7 @@ async def move_file(file_id: str, destination_folder_id: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="rename_file")
+@mcp.tool(name="drive_rename_file", title="Drive: Rename File")
 async def rename_file(file_id: str, new_name: str) -> str:
     """Rename a file or folder in Google Drive."""
     try:
@@ -2578,7 +2581,7 @@ async def rename_file(file_id: str, new_name: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="delete_file")
+@mcp.tool(name="drive_delete_file", title="Drive: Delete File")
 async def delete_file(file_id: str, permanent: bool = False) -> str:
     """Delete a file or folder. Default moves to trash; permanent=True deletes forever."""
     try:
@@ -2594,7 +2597,7 @@ async def delete_file(file_id: str, permanent: bool = False) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="share_file")
+@mcp.tool(name="drive_share_file", title="Drive: Share File")
 async def share_file(file_id: str, email: str, role: str = "reader", send_notification: bool = True, message: str = None) -> str:
     """Share a file with a user. Role: reader, commenter, or writer."""
     try:
@@ -2609,7 +2612,7 @@ async def share_file(file_id: str, email: str, role: str = "reader", send_notifi
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="copy_file")
+@mcp.tool(name="drive_copy_file", title="Drive: Copy File")
 async def copy_file(file_id: str, new_name: str = None, destination_folder_id: str = None) -> str:
     """Copy a file. Cannot copy folders. Optionally specify new name and/or destination folder."""
     try:
@@ -2626,7 +2629,7 @@ async def copy_file(file_id: str, new_name: str = None, destination_folder_id: s
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="search_drive")
+@mcp.tool(name="drive_search", title="Drive: Search", annotations=ToolAnnotations(readOnlyHint=True))
 async def search_drive(
     query: str,
     max_results: int = 10,
@@ -2658,7 +2661,7 @@ async def search_drive(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="get_drive_file")
+@mcp.tool(name="drive_get_file", title="Drive: Get File", annotations=ToolAnnotations(readOnlyHint=True))
 async def get_drive_file(file_id: str) -> str:
     """Get metadata for a Drive file"""
     try:
@@ -2673,7 +2676,7 @@ async def get_drive_file(file_id: str) -> str:
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
-@mcp.tool(name="download_drive_file")
+@mcp.tool(name="drive_download_file", title="Drive: Download File", annotations=ToolAnnotations(readOnlyHint=True))
 async def download_drive_file(file_id: str) -> str:
     """
     Download and return the content of a Drive file.
@@ -2688,7 +2691,7 @@ async def download_drive_file(file_id: str) -> str:
     - Other binary files - returns base64-encoded data
     
     Note: Large files may be truncated. For very large files, consider
-    using the webViewLink from get_drive_file instead.
+    using the webViewLink from drive_get_file instead.
     """
     try:
         import base64
@@ -2834,7 +2837,7 @@ async def download_drive_file(file_id: str) -> str:
 # GOOGLE DOCS TOOLS
 # ============================================================================
 
-@mcp.tool(name="create_doc")
+@mcp.tool(name="docs_create", title="Docs: Create")
 async def create_doc(title: str, content: str = None, folder_id: str = None) -> str:
     """
     Create a new Google Doc.
@@ -2874,7 +2877,7 @@ async def create_doc(title: str, content: str = None, folder_id: str = None) -> 
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="get_doc")
+@mcp.tool(name="docs_get", title="Docs: Get", annotations=ToolAnnotations(readOnlyHint=True))
 async def get_doc(document_id: str) -> str:
     """
     Get the content and structure of a Google Doc.
@@ -2905,7 +2908,7 @@ async def get_doc(document_id: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="append_to_doc")
+@mcp.tool(name="docs_append", title="Docs: Append")
 async def append_to_doc(document_id: str, text: str) -> str:
     """
     Append text to the end of a Google Doc.
@@ -2934,7 +2937,7 @@ async def append_to_doc(document_id: str, text: str) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="insert_text")
+@mcp.tool(name="docs_insert_text", title="Docs: Insert Text")
 async def insert_text(document_id: str, text: str, index: int) -> str:
     """
     Insert text at a specific position in a Google Doc.
@@ -2960,7 +2963,7 @@ async def insert_text(document_id: str, text: str, index: int) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="replace_text")
+@mcp.tool(name="docs_replace_text", title="Docs: Replace Text")
 async def replace_text(document_id: str, find_text: str, replace_with: str, match_case: bool = False) -> str:
     """
     Find and replace all occurrences of text in a Google Doc.
@@ -3000,7 +3003,7 @@ async def replace_text(document_id: str, find_text: str, replace_with: str, matc
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="delete_doc_content")
+@mcp.tool(name="docs_delete_content", title="Docs: Delete Content")
 async def delete_doc_content(document_id: str, start_index: int, end_index: int) -> str:
     """
     Delete a range of content from a Google Doc.
@@ -3025,7 +3028,7 @@ async def delete_doc_content(document_id: str, start_index: int, end_index: int)
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="delete_empty_lines")
+@mcp.tool(name="docs_delete_empty_lines", title="Docs: Delete Empty Lines")
 async def delete_empty_lines(document_id: str, max_consecutive: int = 1) -> str:
     """
     Find and delete excessive empty lines/paragraphs from a Google Doc.
@@ -3092,7 +3095,7 @@ async def delete_empty_lines(document_id: str, max_consecutive: int = 1) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="format_text")
+@mcp.tool(name="docs_format_text", title="Docs: Format Text")
 async def format_text(
     document_id: str,
     start_index: int,
@@ -3181,7 +3184,7 @@ async def format_text(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="format_text_by_search")
+@mcp.tool(name="docs_format_text_by_search", title="Docs: Format Text by Search")
 async def format_text_by_search(
     document_id: str,
     find_text: str,
@@ -3199,7 +3202,7 @@ async def format_text_by_search(
     """
     Find text in a Google Doc and apply formatting to it.
 
-    This is easier than format_text because you don't need to calculate indices.
+    This is easier than docs_format_text because you don't need to calculate indices.
 
     Args:
         document_id: The document ID
@@ -3321,7 +3324,7 @@ async def format_text_by_search(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="format_paragraph")
+@mcp.tool(name="docs_format_paragraph", title="Docs: Format Paragraph")
 async def format_paragraph(
     document_id: str,
     start_index: int,
@@ -3400,7 +3403,7 @@ async def format_paragraph(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="create_bullets")
+@mcp.tool(name="docs_create_bullets", title="Docs: Create Bullets")
 async def create_bullets(
     document_id: str,
     start_index: int,
@@ -3445,7 +3448,7 @@ async def create_bullets(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="remove_bullets")
+@mcp.tool(name="docs_remove_bullets", title="Docs: Remove Bullets")
 async def remove_bullets(document_id: str, start_index: int, end_index: int) -> str:
     """
     Remove bullet or numbered list formatting from paragraphs.
@@ -3475,7 +3478,7 @@ async def remove_bullets(document_id: str, start_index: int, end_index: int) -> 
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="merge_paragraphs")
+@mcp.tool(name="docs_merge_paragraphs", title="Docs: Merge Paragraphs")
 async def merge_paragraphs(
     document_id: str,
     paragraph_break_index: int
@@ -3488,7 +3491,7 @@ async def merge_paragraphs(
     This is useful for things like contact info blocks where you want multiple lines
     that share the same paragraph style (e.g., two address lines in one paragraph).
 
-    To find the correct index, use get_doc_structure to examine the document. The
+    To find the correct index, use docs_get_structure to examine the document. The
     paragraph_break_index should be the index of the newline character ('\\n') that
     separates the two paragraphs you want to merge.
 
@@ -3530,7 +3533,7 @@ async def merge_paragraphs(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="set_heading")
+@mcp.tool(name="docs_set_heading", title="Docs: Set Heading")
 async def set_heading(
     document_id: str,
     start_index: int,
@@ -3597,7 +3600,7 @@ async def set_heading(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="set_document_margins")
+@mcp.tool(name="docs_set_margins", title="Docs: Set Margins")
 async def set_document_margins(
     document_id: str,
     top: float = None,
@@ -3655,7 +3658,7 @@ async def set_document_margins(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="get_doc_structure")
+@mcp.tool(name="docs_get_structure", title="Docs: Get Structure", annotations=ToolAnnotations(readOnlyHint=True))
 async def get_doc_structure(document_id: str, include_formatting: bool = True) -> str:
     """
     Get detailed document structure with index positions and inline formatting.
@@ -3749,7 +3752,7 @@ async def get_doc_structure(document_id: str, include_formatting: bool = True) -
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="insert_link")
+@mcp.tool(name="docs_insert_link", title="Docs: Insert Link")
 async def insert_link(
     document_id: str,
     start_index: int,
@@ -3788,7 +3791,7 @@ async def insert_link(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="link_text")
+@mcp.tool(name="docs_link_text", title="Docs: Link Text")
 async def link_text(
     document_id: str,
     find_text: str,
@@ -3799,7 +3802,7 @@ async def link_text(
     """
     Find text in a Google Doc and make it a hyperlink.
 
-    This is easier to use than insert_link because you don't need to calculate indices.
+    This is easier to use than docs_insert_link because you don't need to calculate indices.
 
     Args:
         document_id: The document ID
@@ -3880,7 +3883,7 @@ async def link_text(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="remove_link")
+@mcp.tool(name="docs_remove_link", title="Docs: Remove Link")
 async def remove_link(
     document_id: str,
     start_index: int,
@@ -3916,7 +3919,7 @@ async def remove_link(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="remove_link_by_search")
+@mcp.tool(name="docs_remove_link_by_search", title="Docs: Remove Link by Search")
 async def remove_link_by_search(
     document_id: str,
     find_text: str,
@@ -3926,7 +3929,7 @@ async def remove_link_by_search(
     """
     Find text in a Google Doc and remove its hyperlink while keeping the text.
 
-    This is easier to use than remove_link because you don't need to calculate indices.
+    This is easier to use than docs_remove_link because you don't need to calculate indices.
 
     Args:
         document_id: The document ID
@@ -4004,7 +4007,7 @@ async def remove_link_by_search(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="batch_update_doc")
+@mcp.tool(name="docs_batch_update", title="Docs: Batch Update")
 async def batch_update_doc(
     document_id: str,
     requests_json: str
@@ -4058,7 +4061,7 @@ async def batch_update_doc(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="insert_image")
+@mcp.tool(name="docs_insert_image", title="Docs: Insert Image")
 async def insert_image(
     document_id: str,
     image_url: str,
@@ -4116,7 +4119,7 @@ async def insert_image(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="insert_table")
+@mcp.tool(name="docs_insert_table", title="Docs: Insert Table")
 async def insert_table(
     document_id: str,
     index: int,
@@ -4155,7 +4158,7 @@ async def insert_table(
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="insert_page_break")
+@mcp.tool(name="docs_insert_page_break", title="Docs: Insert Page Break")
 async def insert_page_break(document_id: str, index: int) -> str:
     """
     Insert a page break into a Google Doc.
@@ -4215,16 +4218,16 @@ def _scope_error(scope: str, what: str) -> Optional[str]:
 def _sc_site(site_url: Optional[str]) -> str:
     site = (site_url or os.environ.get('SEARCH_CONSOLE_SITE') or '').strip()
     if not site:
-        raise ValueError("No site given. Pass site_url (see list_search_console_sites) or set SEARCH_CONSOLE_SITE.")
+        raise ValueError("No site given. Pass site_url (see search_console_list_sites) or set SEARCH_CONSOLE_SITE.")
     return site
 
 
 def _ga_property(property_id: Optional[str]) -> str:
     pid = (property_id or os.environ.get('GA4_PROPERTY_ID') or '').strip()
     if not pid:
-        raise ValueError("No property given. Pass property_id (see list_analytics_properties) or set GA4_PROPERTY_ID.")
+        raise ValueError("No property given. Pass property_id (see analytics_list_properties) or set GA4_PROPERTY_ID.")
     if pid.upper().startswith('G-'):
-        raise ValueError(f"{pid} is a measurement ID. Use the numeric GA4 property ID (list_analytics_properties shows it).")
+        raise ValueError(f"{pid} is a measurement ID. Use the numeric GA4 property ID (analytics_list_properties shows it).")
     return pid if pid.startswith('properties/') else f"properties/{pid}"
 
 
@@ -4248,7 +4251,7 @@ def _ga_rows(resp: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
-@mcp.tool(name="list_search_console_sites")
+@mcp.tool(name="search_console_list_sites", title="Search Console: List Sites", annotations=ToolAnnotations(readOnlyHint=True))
 async def list_search_console_sites() -> str:
     """List the Search Console properties this account can see, with permission level.
     Use a returned siteUrl (e.g. "sc-domain:example.com" or "https://www.example.com/") as site_url in the other tools."""
@@ -4280,7 +4283,7 @@ class SearchConsoleQueryInput(BaseModel):
     start_row: int = Field(default=0, ge=0)
 
 
-@mcp.tool(name="search_console_query")
+@mcp.tool(name="search_console_query", title="Search Console: Query", annotations=ToolAnnotations(readOnlyHint=True))
 async def search_console_query(params: SearchConsoleQueryInput) -> str:
     """Search performance from Google Search Console: clicks, impressions, CTR and average position,
     grouped by the dimensions you choose (query, page, country, device, date). Sorted by clicks.
@@ -4334,7 +4337,7 @@ async def search_console_query(params: SearchConsoleQueryInput) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="inspect_url")
+@mcp.tool(name="search_console_inspect_url", title="Search Console: Inspect URL", annotations=ToolAnnotations(readOnlyHint=True))
 async def inspect_url(url: str, site_url: Optional[str] = None) -> str:
     """Google's index status for one URL (URL Inspection): whether it's indexed, the coverage state,
     last crawl time, the canonical Google chose, and mobile usability. The URL must belong to site_url's property."""
@@ -4367,7 +4370,7 @@ async def inspect_url(url: str, site_url: Optional[str] = None) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="list_sitemaps")
+@mcp.tool(name="search_console_list_sitemaps", title="Search Console: List Sitemaps", annotations=ToolAnnotations(readOnlyHint=True))
 async def list_sitemaps(site_url: Optional[str] = None) -> str:
     """Sitemaps submitted for a Search Console property, with last download time, warnings and errors."""
     err = _scope_error(_SC_SCOPE, "Search Console")
@@ -4382,7 +4385,7 @@ async def list_sitemaps(site_url: Optional[str] = None) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="list_analytics_properties")
+@mcp.tool(name="analytics_list_properties", title="Analytics: List Properties", annotations=ToolAnnotations(readOnlyHint=True))
 async def list_analytics_properties() -> str:
     """List the Google Analytics (GA4) accounts and properties this account can see, with their numeric property IDs.
     Needs the Google Analytics Admin API enabled in the Cloud project."""
@@ -4430,7 +4433,7 @@ class AnalyticsReportInput(BaseModel):
     limit: int = Field(default=100, ge=1, le=100000)
 
 
-@mcp.tool(name="analytics_report")
+@mcp.tool(name="analytics_report", title="Analytics: Report", annotations=ToolAnnotations(readOnlyHint=True))
 async def analytics_report(params: AnalyticsReportInput) -> str:
     """Run a Google Analytics (GA4) report: metrics over a date range, optionally split by dimensions.
     Examples: top pages = dimensions ["pagePath"], metrics ["screenPageViews","activeUsers"];
@@ -4471,7 +4474,7 @@ async def analytics_report(params: AnalyticsReportInput) -> str:
         return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
-@mcp.tool(name="analytics_realtime")
+@mcp.tool(name="analytics_realtime", title="Analytics: Realtime", annotations=ToolAnnotations(readOnlyHint=True))
 async def analytics_realtime(metrics: Optional[List[str]] = None, dimensions: Optional[List[str]] = None,
                              property_id: Optional[str] = None, limit: int = 50) -> str:
     """Google Analytics (GA4) realtime report: activity in the last 30 minutes.

@@ -46,7 +46,7 @@ Each user deploys their own instance with their own credentials - your data stay
    - Google Tasks API
    - Google Search Console API
    - Google Analytics Data API
-   - Google Analytics Admin API (only for `list_analytics_properties`)
+   - Google Analytics Admin API (only for `analytics_list_properties`)
 
 4. Configure OAuth consent screen (APIs & Services → OAuth consent screen):
    - User Type: **External**
@@ -111,36 +111,38 @@ Older installs connected to `/sse` with no sign-in, using a `GOOGLE_TOKEN_JSON` 
 
 ## Available Tools
 
+Every tool is named for its service (`gmail_`, `calendar_`, `drive_`, `docs_`, `sheets_`, `tasks_`, `search_console_`, `analytics_`) and carries a title like "Gmail: Send Message". Tools that only read are marked read-only, so MCP clients can list them separately from tools that change things. `get_time` keeps its plain name.
+
 ### Google Sheets
 
 All Sheets tools support a `mode` parameter: `"header"` (default) uses column header names, `"letter"` uses column letters (A, B, C...).
 
 | Tool | Description |
 |------|-------------|
-| `query_sheet` | Query with filters, sorting, column selection. Supports date comparisons. |
-| `get_row` | Get complete row(s) by row number or unique ID lookup |
-| `get_cell` | Get cell value(s) by A1 notation (e.g., "A1", "B5") |
-| `get_column` | Get all values in a column with row numbers (for easy update_cells follow-up) |
-| `find_row_by_unique_id` | Find row number(s) by searching a column for a value |
-| `update_row` | Update specific cells in existing row(s) by row number or unique ID |
-| `update_cells` | Update cell(s) directly by A1 notation - the core write primitive |
-| `add_row` | Append new row(s) to the end of the sheet |
-| `insert_row` | Insert row at specific position (shifts existing rows down) |
-| `delete_row` | Delete row(s) by row number or unique ID lookup |
-| `insert_column` | Insert column at position (shifts right) or append to first empty if no position given |
-| `delete_column` | Delete a column by header name or letter |
-| `create_spreadsheet` | Create a new Google Sheets document with optional worksheets |
-| `add_worksheet` | Add a new worksheet (tab) to an existing spreadsheet |
-| `delete_worksheet` | Delete a worksheet from a spreadsheet |
-| `list_worksheets` | List all worksheets in a spreadsheet with their properties |
-| `rename_worksheet` | Rename a worksheet |
-| `get_spreadsheet_info` | Get spreadsheet metadata (title, URL, all worksheets) |
-| `clear_range` | Clear cell contents in a range without deleting rows/columns |
-| `sort_worksheet` | Sort entire worksheet by a column |
-| `copy_worksheet` | Copy a worksheet to the same or a different spreadsheet |
-| `merge_cells` | Merge a range of cells into one |
-| `unmerge_cells` | Unmerge previously merged cells |
-| `freeze_rows_columns` | Freeze rows and/or columns (headers stay visible while scrolling) |
+| `sheets_query` | Query with filters, sorting, column selection. Supports date comparisons. |
+| `sheets_get_row` | Get complete row(s) by row number or unique ID lookup |
+| `sheets_get_cell` | Get cell value(s) by A1 notation (e.g., "A1", "B5") |
+| `sheets_get_column` | Get all values in a column with row numbers (for easy update_cells follow-up) |
+| `sheets_find_row` | Find row number(s) by searching a column for a value |
+| `sheets_update_row` | Update specific cells in existing row(s) by row number or unique ID |
+| `sheets_update_cells` | Update cell(s) directly by A1 notation - the core write primitive |
+| `sheets_add_row` | Append new row(s) to the end of the sheet |
+| `sheets_insert_row` | Insert row at specific position (shifts existing rows down) |
+| `sheets_delete_row` | Delete row(s) by row number or unique ID lookup |
+| `sheets_insert_column` | Insert column at position (shifts right) or append to first empty if no position given |
+| `sheets_delete_column` | Delete a column by header name or letter |
+| `sheets_create_spreadsheet` | Create a new Google Sheets document with optional worksheets |
+| `sheets_add_worksheet` | Add a new worksheet (tab) to an existing spreadsheet |
+| `sheets_delete_worksheet` | Delete a worksheet from a spreadsheet |
+| `sheets_list_worksheets` | List all worksheets in a spreadsheet with their properties |
+| `sheets_rename_worksheet` | Rename a worksheet |
+| `sheets_get_spreadsheet_info` | Get spreadsheet metadata (title, URL, all worksheets) |
+| `sheets_clear_range` | Clear cell contents in a range without deleting rows/columns |
+| `sheets_sort_worksheet` | Sort entire worksheet by a column |
+| `sheets_copy_worksheet` | Copy a worksheet to the same or a different spreadsheet |
+| `sheets_merge_cells` | Merge a range of cells into one |
+| `sheets_unmerge_cells` | Unmerge previously merged cells |
+| `sheets_freeze_rows_columns` | Freeze rows and/or columns (headers stay visible while scrolling) |
 
 **Query Operators**: `==`, `!=`, `>`, `<`, `>=`, `<=`, `in`, `not in`, `contains`, `not contains`, `is_null`, `not_null`
 
@@ -152,63 +154,63 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 
 | Tool | Description |
 |------|-------------|
-| `list_calendars` | List all calendars |
-| `list_calendar_events` | List events with time range and search |
-| `get_calendar_event` | Get specific event details |
-| `create_calendar_event` | Create new event with optional attendees/reminders/timezone |
-| `update_calendar_event` | Modify existing event |
-| `delete_calendar_event` | Remove event |
+| `calendar_list_calendars` | List all calendars |
+| `calendar_list_events` | List events with time range and search |
+| `calendar_get_event` | Get specific event details |
+| `calendar_create_event` | Create new event with optional attendees/reminders/timezone |
+| `calendar_update_event` | Modify existing event |
+| `calendar_delete_event` | Remove event |
 
-**Timezone**: `create_calendar_event` and `update_calendar_event` accept an optional `timezone` parameter (IANA format, e.g., `'America/New_York'`, `'Europe/London'`, `'UTC'`). If omitted, uses the calendar's default timezone.
+**Timezone**: `calendar_create_event` and `calendar_update_event` accept an optional `timezone` parameter (IANA format, e.g., `'America/New_York'`, `'Europe/London'`, `'UTC'`). If omitted, uses the calendar's default timezone.
 
 ### Gmail
 
 | Tool | Description |
 |------|-------------|
-| `list_gmail_messages` | Search/list messages with Gmail query syntax |
-| `get_gmail_message` | Get full message content |
-| `send_gmail_message` | Send email (with CC/BCC support) |
-| `modify_gmail_message` | Add/remove labels |
-| `batch_modify_gmail` | Bulk label operations |
-| `mark_gmail_read` / `mark_gmail_unread` | Mark messages as read/unread |
-| `star_gmail` / `unstar_gmail` | Star/unstar messages |
-| `archive_gmail` | Archive messages |
-| `move_to_inbox` | Move messages back to inbox |
-| `trash_gmail` | Move to trash |
-| `spam_gmail` | Mark as spam |
-| `list_gmail_labels` | List all labels |
-| `create_gmail_label` | Create new label |
+| `gmail_list_messages` | Search/list messages with Gmail query syntax |
+| `gmail_get_message` | Get full message content |
+| `gmail_send_message` | Send email (with CC/BCC support) |
+| `gmail_modify_message` | Add/remove labels |
+| `gmail_batch_modify` | Bulk label operations |
+| `gmail_mark_read` / `gmail_mark_unread` | Mark messages as read/unread |
+| `gmail_star` / `gmail_unstar` | Star/unstar messages |
+| `gmail_archive` | Archive messages |
+| `gmail_move_to_inbox` | Move messages back to inbox |
+| `gmail_trash` | Move to trash |
+| `gmail_mark_spam` | Mark as spam |
+| `gmail_list_labels` | List all labels |
+| `gmail_create_label` | Create new label |
 
 ### Google Tasks
 
 | Tool | Description |
 |------|-------------|
-| `list_task_lists` | List all task lists |
-| `create_task_list` / `delete_task_list` / `update_task_list` | Manage task lists |
-| `list_tasks` | List tasks (with completed/hidden options) |
-| `get_task` | Get task details |
-| `create_task` | Create task with notes, due date, parent task |
-| `update_task` | Modify task |
-| `complete_task` | Mark complete |
-| `delete_task` | Remove task |
-| `move_task_to_list` | Move between lists |
-| `star_task` / `unstar_task` | Star/unstar tasks |
-| `clear_completed_tasks` | Clear completed from list |
+| `tasks_list_task_lists` | List all task lists |
+| `tasks_create_task_list` / `tasks_delete_task_list` / `tasks_update_task_list` | Manage task lists |
+| `tasks_list_tasks` | List tasks (with completed/hidden options) |
+| `tasks_get_task` | Get task details |
+| `tasks_create_task` | Create task with notes, due date, parent task |
+| `tasks_update_task` | Modify task |
+| `tasks_complete_task` | Mark complete |
+| `tasks_delete_task` | Remove task |
+| `tasks_move_task_to_list` | Move between lists |
+| `tasks_star_task` / `tasks_unstar_task` | Star/unstar tasks |
+| `tasks_clear_completed` | Clear completed from list |
 
 ### Google Drive
 
 | Tool | Description |
 |------|-------------|
-| `search_drive` | Search files by query (name, type, etc.) |
-| `get_drive_file` | Get file metadata |
-| `download_drive_file` | Download and return file content |
-| `list_folder` | List contents of a folder (simpler than search) |
-| `create_folder` | Create a new folder |
-| `move_file` | Move a file to a different folder |
-| `rename_file` | Rename a file or folder |
-| `delete_file` | Delete/trash a file or folder |
-| `share_file` | Share a file with another user |
-| `copy_file` | Create a copy of a file |
+| `drive_search` | Search files by query (name, type, etc.) |
+| `drive_get_file` | Get file metadata |
+| `drive_download_file` | Download and return file content |
+| `drive_list_folder` | List contents of a folder (simpler than search) |
+| `drive_create_folder` | Create a new folder |
+| `drive_move_file` | Move a file to a different folder |
+| `drive_rename_file` | Rename a file or folder |
+| `drive_delete_file` | Delete/trash a file or folder |
+| `drive_share_file` | Share a file with another user |
+| `drive_copy_file` | Create a copy of a file |
 
 **Download supports**:
 - Text files → returns text content
@@ -219,36 +221,36 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 - Images → returns base64-encoded data
 
 **File operations**:
-- `delete_file` moves to trash by default; use `permanent=True` to delete forever
-- `share_file` supports roles: `reader`, `commenter`, `writer`
-- `copy_file` cannot copy folders, only files
+- `drive_delete_file` moves to trash by default; use `permanent=True` to delete forever
+- `drive_share_file` supports roles: `reader`, `commenter`, `writer`
+- `drive_copy_file` cannot copy folders, only files
 
 ### Google Docs
 
 | Tool | Description |
 |------|-------------|
-| `create_doc` | Create a new Google Doc with optional initial content and folder placement |
-| `get_doc` | Get document content as plain text with structure info |
-| `append_to_doc` | Append text to the end of a document |
-| `insert_text` | Insert text at a specific index position |
-| `replace_text` | Find and replace all occurrences of text |
-| `delete_doc_content` | Delete a range of content by start/end index |
-| `delete_empty_lines` | Remove excessive empty lines/paragraphs (configurable threshold) |
-| `format_text` | Apply text formatting by index range (bold, italic, underline, font size, colors) |
-| `format_text_by_search` | Find text and apply formatting (easier - no indices needed) |
-| `format_paragraph` | Apply paragraph formatting: alignment, line spacing, space above/below, indentation |
-| `create_bullets` | Add bullet or numbered list formatting to paragraphs |
-| `remove_bullets` | Remove bullet/list formatting from paragraphs |
-| `set_heading` | Apply heading styles (Heading 1-6 or normal text) |
-| `set_document_margins` | Set page margins (top, bottom, left, right in inches) |
-| `get_doc_structure` | Get detailed document structure with index positions for each element |
-| `insert_link` | Add a hyperlink to existing text (requires indices) |
-| `link_text` | Find text and make it a hyperlink (easier - no indices needed) |
-| `insert_image` | Insert an image from a URL |
-| `insert_table` | Create a table with specified rows and columns |
-| `insert_page_break` | Insert a page break |
+| `docs_create` | Create a new Google Doc with optional initial content and folder placement |
+| `docs_get` | Get document content as plain text with structure info |
+| `docs_append` | Append text to the end of a document |
+| `docs_insert_text` | Insert text at a specific index position |
+| `docs_replace_text` | Find and replace all occurrences of text |
+| `docs_delete_content` | Delete a range of content by start/end index |
+| `docs_delete_empty_lines` | Remove excessive empty lines/paragraphs (configurable threshold) |
+| `docs_format_text` | Apply text formatting by index range (bold, italic, underline, font size, colors) |
+| `docs_format_text_by_search` | Find text and apply formatting (easier - no indices needed) |
+| `docs_format_paragraph` | Apply paragraph formatting: alignment, line spacing, space above/below, indentation |
+| `docs_create_bullets` | Add bullet or numbered list formatting to paragraphs |
+| `docs_remove_bullets` | Remove bullet/list formatting from paragraphs |
+| `docs_set_heading` | Apply heading styles (Heading 1-6 or normal text) |
+| `docs_set_margins` | Set page margins (top, bottom, left, right in inches) |
+| `docs_get_structure` | Get detailed document structure with index positions for each element |
+| `docs_insert_link` | Add a hyperlink to existing text (requires indices) |
+| `docs_link_text` | Find text and make it a hyperlink (easier - no indices needed) |
+| `docs_insert_image` | Insert an image from a URL |
+| `docs_insert_table` | Create a table with specified rows and columns |
+| `docs_insert_page_break` | Insert a page break |
 
-**Index positions**: Google Docs uses 1-based indexing. Use `get_doc_structure` to see each paragraph with its start/end indices for precise formatting.
+**Index positions**: Google Docs uses 1-based indexing. Use `docs_get_structure` to see each paragraph with its start/end indices for precise formatting.
 
 **Bullet presets**: `BULLET_DISC_CIRCLE_SQUARE` (default), `BULLET_CHECKBOX`, `NUMBERED_DECIMAL_ALPHA_ROMAN`, `NUMBERED_DECIMAL_NESTED`, and more.
 
@@ -256,16 +258,16 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 
 | Tool | Description |
 |------|-------------|
-| `list_search_console_sites` | Properties this account can see, with permission level |
+| `search_console_list_sites` | Properties this account can see, with permission level |
 | `search_console_query` | Clicks, impressions, CTR and position by query, page, country, device or date, with filters |
-| `inspect_url` | Google's index status for one URL: indexed or not, last crawl, chosen canonical |
-| `list_sitemaps` | Submitted sitemaps with last download, warnings and errors |
+| `search_console_inspect_url` | Google's index status for one URL: indexed or not, last crawl, chosen canonical |
+| `search_console_list_sitemaps` | Submitted sitemaps with last download, warnings and errors |
 
 ### Google Analytics (GA4, read only)
 
 | Tool | Description |
 |------|-------------|
-| `list_analytics_properties` | Accounts and properties with their numeric property IDs |
+| `analytics_list_properties` | Accounts and properties with their numeric property IDs |
 | `analytics_report` | Any metrics over a date range, split by dimensions (pages, sources, countries, events), with a filter and sort |
 | `analytics_realtime` | Activity in the last 30 minutes |
 
@@ -363,7 +365,7 @@ This server uses:
 ## Known Limitations
 
 - **Images from Drive**: Returned as base64. AI assistants need to decode and save locally to view.
-- **Large files**: Very large files may timeout. Consider using `get_drive_file` for metadata and accessing via `webViewLink` instead.
+- **Large files**: Very large files may timeout. Consider using `drive_get_file` for metadata and accessing via `webViewLink` instead.
 - **Google Workspace files**: Docs/Sheets/Slides are exported to text/CSV, not native format.
 
 ## License
