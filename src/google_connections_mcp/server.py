@@ -26,7 +26,7 @@ from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, Re
 auth = get_auth_manager()
 
 INSTRUCTIONS = """Google Connections: the owner's own Google account (Gmail, Calendar, Drive, Docs,
-Sheets, Tasks) plus read-only Search Console and Google Analytics.
+Sheets, Tasks, Markdown files in Drive) plus read-only Search Console and Google Analytics.
 
 - Read before you write: look up the real ids (message, event, file, spreadsheet,
   task list) first, and use what the tools return rather than guessing.
@@ -39,6 +39,8 @@ Sheets, Tasks) plus read-only Search Console and Google Analytics.
   2-3 days behind. Google Analytics: use the numeric property ID from
   analytics_list_properties, never the G-XXXX measurement ID. If a tool says the
   token lacks a permission, the owner reconnects the connector to grant it.
+- Markdown (.md) files in Drive: use the markdown_* tools. Read first, pass the
+  `version` back as expected_version, and match text exactly.
 - Every tool returns JSON with "success"; when it's false, report the error plainly.
 """
 
@@ -4495,6 +4497,15 @@ async def analytics_realtime(metrics: Optional[List[str]] = None, dimensions: Op
 
 
 # ============================================================================
+# MARKDOWN FILES IN DRIVE (markdown_drive.py; also served alone at /markdown/mcp)
+# ============================================================================
+
+from google_connections_mcp.markdown_drive import register_markdown_tools, MARKDOWN_INSTRUCTIONS
+
+register_markdown_tools(mcp, auth.get_drive_service)
+
+
+# ============================================================================
 # OAUTH WEB ENDPOINTS
 # ============================================================================
 
@@ -4597,9 +4608,73 @@ async def health_check(request: Request):
         "service": "Google Connections MCP",
         "authenticated": auth.is_authenticated(),
         "mcp_url": public_url() + "/mcp",
+        "product_urls": {slug: public_url() + f"/{slug}/mcp" for slug in product_servers},
         "legacy_sse": legacy_enabled(),
         "storage_persistent": store.persistent(),
     })
+
+
+# ============================================================================
+# ONE ENDPOINT PER PRODUCT
+# ============================================================================
+# /mcp serves every tool. Each product also gets its own address with only its
+# tools, so an AI app (a small local model especially) can be given just what it
+# needs: /gmail/mcp, /calendar/mcp, ... /markdown/mcp. They share this server's
+# sign-in, token store and Google token; each is added as its own connector.
+# get_time rides along on every one.
+
+_ASK_FIRST = "Ask before anything that sends, deletes, shares or overwrites, and say exactly what will happen."
+_COMMON = ("Call get_time for today's date and the owner's time zone. Every tool returns JSON "
+           "with \"success\"; when it's false, report the error plainly.")
+
+PRODUCTS = [
+    ('gmail', 'Gmail', ('gmail_',),
+     f"The owner's Gmail. Look up real message and thread ids before acting on them. {_ASK_FIRST}"),
+    ('calendar', 'Calendar', ('calendar_',),
+     f"The owner's Google Calendar. Use calendar_list_calendars for calendar ids. {_ASK_FIRST}"),
+    ('drive', 'Drive', ('drive_',),
+     f"The owner's Google Drive. Use drive_search or drive_list_folder for real file ids. {_ASK_FIRST}"),
+    ('docs', 'Docs', ('docs_',),
+     f"The owner's Google Docs. Read a document's structure before editing by index. {_ASK_FIRST}"),
+    ('sheets', 'Sheets', ('sheets_',),
+     f"The owner's Google Sheets. List worksheets and read headers before writing rows. {_ASK_FIRST}"),
+    ('tasks', 'Tasks', ('tasks_',),
+     f"The owner's Google Tasks. Use tasks_list_task_lists for list ids. {_ASK_FIRST}"),
+    ('search-console', 'Search Console', ('search_console_',),
+     "Read-only Google Search Console. search_console_list_sites gives the site_url to use; data is 2-3 days behind."),
+    ('analytics', 'Analytics', ('analytics_',),
+     "Read-only Google Analytics (GA4). Use the numeric property ID from analytics_list_properties, never the G-XXXX measurement ID."),
+    ('markdown', 'Markdown', ('markdown_',), MARKDOWN_INSTRUCTIONS.strip()),
+]
+
+
+def _product_server(slug: str, title: str, prefixes, instructions: str) -> FastMCP:
+    server = FastMCP(
+        f"Google Connections: {title}",
+        instructions=f"{instructions}\n\n{_COMMON}",
+        auth_server_provider=oauth_provider,
+        auth=AuthSettings(
+            issuer_url=public_url(),
+            resource_server_url=public_url() + f"/{slug}/mcp",
+            client_registration_options=ClientRegistrationOptions(enabled=True, default_scopes=[MCP_SCOPE]),
+            revocation_options=RevocationOptions(enabled=True),
+            required_scopes=[MCP_SCOPE],
+        ),
+        host="0.0.0.0",
+        stateless_http=True,
+        json_response=True,
+        streamable_http_path=f"/{slug}/mcp",
+    )
+    # The same tool objects as /mcp, filtered by their service prefix.
+    server._tool_manager._tools = {
+        name: tool for name, tool in mcp._tool_manager._tools.items()
+        if name == 'get_time' or name.startswith(tuple(prefixes))
+    }
+    return server
+
+
+product_servers = {slug: _product_server(slug, title, prefixes, text)
+                   for slug, title, prefixes, text in PRODUCTS}
 
 
 # ============================================================================
@@ -4612,7 +4687,31 @@ def build_app():
     from starlette.routing import Route, Mount
     from starlette.responses import Response
 
+    import contextlib
+
     app = mcp.streamable_http_app()  # /mcp, /authorize, /token, /register, /revoke, discovery
+
+    # Each product's endpoint and its protected-resource metadata, added to this
+    # app so they sit behind the same token check. The sign-in routes themselves
+    # (/authorize, /token, /register, /revoke and the authorization-server
+    # metadata) come once, from /mcp's app above.
+    for slug, server in product_servers.items():
+        product_app = server.streamable_http_app()
+        for route in product_app.router.routes:
+            path = getattr(route, 'path', '')
+            if path == f"/{slug}/mcp" or path.startswith('/.well-known/oauth-protected-resource/'):
+                app.router.routes.append(route)
+
+    # Every endpoint's session manager has to be running, not just /mcp's.
+    @contextlib.asynccontextmanager
+    async def lifespan(_app):
+        async with contextlib.AsyncExitStack() as stack:
+            await stack.enter_async_context(mcp.session_manager.run())
+            for server in product_servers.values():
+                await stack.enter_async_context(server.session_manager.run())
+            yield
+
+    app.router.lifespan_context = lifespan
 
     # The old SSE transport, unauthenticated, kept only until /mcp is in use.
     sse = SseServerTransport("/messages/")
@@ -4655,6 +4754,7 @@ def main():
 
     print(f"Starting server on port {port}")
     print(f"MCP endpoint: {public_url()}/mcp (sign in with Google as OWNER_EMAIL)")
+    print("Product endpoints: " + ", ".join(f"/{slug}/mcp" for slug in product_servers))
     print(f"Legacy /sse and /oauth/start: {'ON' if legacy_enabled() else 'off'}")
     print(f"Token store: {store.path} ({'persistent' if store.persistent() else 'NOT persistent: mount a volume and set DATA_DIR'})")
     print(f"Google authenticated: {auth.is_authenticated()}")

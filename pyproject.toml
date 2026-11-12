@@ -28,6 +28,7 @@ dependencies = [
 
 [project.scripts]
 google-connections-mcp = "google_connections_mcp:main"
+markdown-drive-mcp = "google_connections_mcp.local_markdown:main"
 
 [project.urls]
 "Homepage" = "https://github.com/michaelzrork/google-connections-mcp"

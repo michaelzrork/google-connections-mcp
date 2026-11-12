@@ -12,6 +12,8 @@ A Model Context Protocol (MCP) server that provides AI assistants with access to
 - **Google Docs** - Create documents, read/edit content, formatting (bold, italic, fonts, headings, bullets, margins)
 - **Search Console** - Search performance (queries, pages, clicks, impressions, position), URL index status, sitemaps (read only)
 - **Google Analytics (GA4)** - Reports, realtime activity, property list (read only)
+- **Markdown files in Drive** - List, read, create and edit `.md` files by exact text (no delete), with a version check so an edit never overwrites changes made since the file was read
+- **One endpoint per product** - `/mcp` has every tool; `/gmail/mcp`, `/markdown/mcp` and the rest each have only their own, so an AI app gets just what it needs
 - **Time** - Get current date/time in any IANA timezone
 
 ## How It Works
@@ -100,6 +102,8 @@ Each user deploys their own instance with their own credentials - your data stay
 **Claude:** Settings → Connectors → Add custom connector, URL `https://your-railway-url/mcp`. Claude opens Google's sign-in: sign in as `OWNER_EMAIL` and approve. (Unverified app? Choose **Advanced → Go to (app name)**.)
 
 **ChatGPT** (website): Settings → Apps & Connectors → add a custom MCP server with the same URL, Authentication **OAuth**.
+
+**One product per connector (optional):** besides `/mcp` (every tool), each product has its own address with only its tools: `/gmail/mcp`, `/calendar/mcp`, `/drive/mcp`, `/docs/mcp`, `/sheets/mcp`, `/tasks/mcp`, `/search-console/mcp`, `/analytics/mcp` and `/markdown/mcp`. Add any of them as its own connector the same way. They share one sign-in and one Google token, so connecting a second one asks you to sign in again but changes nothing else. Smaller toolsets help a lot with small local models, and an app only gets the products you give it. (Google itself grants the same permissions to all of them: the split is in which tools each address offers.)
 
 To grant new Google permissions later (after a scope is added to `oauth_config.py`), reconnect the connector: the sign-in asks for them.
 
@@ -275,6 +279,21 @@ All Sheets tools support a `mode` parameter: `"header"` (default) uses column he
 
 **Adding these to an existing install**: enable the APIs and add the two scopes (step 1), deploy, then visit `/oauth/start` again and replace `GOOGLE_TOKEN_JSON` with the new token from the logs. Until then these tools say so, and every other tool keeps working on the old token.
 
+### Markdown files in Drive
+
+`.md` files only (by name, or a `text/markdown` file type). Nothing here can delete, rename, move, share or trash a file, and content is written back as the same file, never converted to a Google Doc; Drive keeps every revision. Set `MARKDOWN_FOLDER_ID` and these tools refuse any file outside that one folder.
+
+| Tool | Arguments | Description |
+|------|-----------|-------------|
+| `markdown_list_files` | `folder_id?`, `name_contains?`, `limit?` | The `.md` files in the folder, with ids, names and versions |
+| `markdown_read` | `file` (id or exact name) | The text with 1-based line numbers (`12\| text`), the line count and the `version` |
+| `markdown_create` | `name`, `text?`, `folder_id?` | A new `.md` file; refuses if the name is taken |
+| `markdown_insert` | `file`, `text`, `after_line` or `anchor`, `expected_version?` | Inserts lines after line N (0 = top) or after the line an exact, unique `anchor` ends on |
+| `markdown_remove_text` | `file`, `text`, `expected_version?` | Removes exact text that appears once; whole lines go with their line break |
+| `markdown_replace_text` | `file`, `old_text`, `new_text`, `expected_version?` | Swaps exact text that appears once (an edit is a replace) |
+
+Every edit returns the new `version` and how many lines were added and removed. Text that's missing or appears more than once is refused with the count, so the model adds more surrounding text instead of guessing. Passing the `version` from `markdown_read` as `expected_version` refuses the edit if the file changed in between.
+
 ### Utility
 
 | Tool | Description |
@@ -304,6 +323,57 @@ python -m google_connections_mcp.server
 
 The server runs on port 8000 by default (or `$PORT` if set).
 
+## Markdown on your own computer (VS Code + Ollama)
+
+The `markdown_*` tools can also run on your computer over stdio, with no hosted server: for an editor like VS Code with [Continue](https://continue.dev) or [Cline](https://cline.bot) and a local [Ollama](https://ollama.com) model. It signs in to Google on that computer and asks only for Drive.
+
+> **At work, check first.** Signing in to a personal Google account from a company computer, or putting company notes in a personal Drive, may be against your company's IT or data policy.
+
+**1. A Desktop OAuth client.** In Google Cloud Console (the same project is fine): APIs & Services → Credentials → Create Credentials → OAuth client ID → Application type **Desktop app** → Create → **Download JSON**. Save it somewhere private, e.g. `~/.config/markdown-drive-mcp/client_secret.json`. The Drive API must be enabled in the project; if the consent screen is in Testing, your account must be a test user.
+
+**2. Install and sign in once** (Python 3.10+):
+
+```bash
+pip install git+https://github.com/michaelzrork/google-connections-mcp.git
+export MARKDOWN_CLIENT_SECRET=~/.config/markdown-drive-mcp/client_secret.json
+export MARKDOWN_FOLDER_ID=<the id at the end of the folder's Drive URL>
+markdown-drive-mcp --login        # or: python -m google_connections_mcp.local_markdown --login
+```
+
+A browser opens for Google's sign-in. The sign-in is saved at `~/.config/markdown-drive-mcp/token.json` (`%APPDATA%\markdown-drive-mcp\token.json` on Windows; `MARKDOWN_TOKEN_PATH` overrides it) and refreshes itself.
+
+**3. Tell the editor about it.** Continue: a file `.continue/mcpServers/markdown-drive.yaml` in your workspace (or the `mcpServers` section of `~/.continue/config.yaml`):
+
+```yaml
+name: Markdown Drive
+version: 0.0.1
+schema: v1
+mcpServers:
+  - name: Markdown Drive
+    command: markdown-drive-mcp
+    env:
+      MARKDOWN_CLIENT_SECRET: /home/you/.config/markdown-drive-mcp/client_secret.json
+      MARKDOWN_FOLDER_ID: your-folder-id
+```
+
+Cline: MCP Servers → Configure → `cline_mcp_settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "markdown-drive": {
+      "command": "markdown-drive-mcp",
+      "env": {
+        "MARKDOWN_CLIENT_SECRET": "/home/you/.config/markdown-drive-mcp/client_secret.json",
+        "MARKDOWN_FOLDER_ID": "your-folder-id"
+      }
+    }
+  }
+}
+```
+
+On Windows use full paths (`C:\\Users\\you\\...`), and if `markdown-drive-mcp` isn't on the editor's PATH, use `"command": "python", "args": ["-m", "google_connections_mcp.local_markdown"]`. Pick an Ollama model that supports tool calls (Qwen 2.5/3, Llama 3.1+, Mistral Small and similar).
+
 ## Environment Variables
 
 | Variable | Required | Description |
@@ -316,6 +386,7 @@ The server runs on port 8000 by default (or `$PORT` if set).
 | `LEGACY_SSE` | No | `on` / `off` to force the old `/sse` endpoint; by default it closes after the first `/mcp` connection |
 | `SEARCH_CONSOLE_SITE` | No | Default Search Console property for the Search Console tools |
 | `GA4_PROPERTY_ID` | No | Default numeric GA4 property ID for the Analytics tools |
+| `MARKDOWN_FOLDER_ID` | No | The only Drive folder the `markdown_*` tools may use (the id from the folder's URL). Without it they reach every `.md` file |
 | `PORT` | No | Server port (default: 8000) |
 
 *Without a volume the server still runs, but tokens are lost on every deploy and the AI app has to sign in again.
@@ -325,7 +396,8 @@ The server runs on port 8000 by default (or `$PORT` if set).
 | Endpoint | Description |
 |----------|-------------|
 | `/mcp` | MCP endpoint (Streamable HTTP, sign-in required): what your AI app connects to |
-| `/.well-known/oauth-protected-resource/mcp`, `/.well-known/oauth-authorization-server` | OAuth discovery |
+| `/gmail/mcp`, `/calendar/mcp`, `/drive/mcp`, `/docs/mcp`, `/sheets/mcp`, `/tasks/mcp`, `/search-console/mcp`, `/analytics/mcp`, `/markdown/mcp` | The same, with only that product's tools (plus `get_time`) |
+| `/.well-known/oauth-protected-resource/<path>`, `/.well-known/oauth-authorization-server` | OAuth discovery (one protected-resource document per endpoint) |
 | `/register`, `/authorize`, `/token`, `/revoke` | OAuth 2.1: client registration, sign-in, tokens, revocation |
 | `/oauth/callback` | Google's redirect back after sign-in |
 | `/health` | Status: Google signed in, the `/mcp` address, whether the old endpoints are open, whether storage is persistent |
@@ -360,6 +432,7 @@ This server uses:
 - [PyMuPDF](https://pymupdf.readthedocs.io/) for PDF text extraction
 - [Starlette](https://www.starlette.io/) for HTTP transport
 - The MCP SDK's OAuth support (`mcp.server.auth`) with Google as the login: `mcp_oauth.py`, tokens in `token_store.py`
+- `markdown_drive.py`: the Markdown tools and their edit logic, shared by the hosted server and the local stdio server (`local_markdown.py`)
 - [uv](https://github.com/astral-sh/uv) for fast dependency management
 
 ## Known Limitations

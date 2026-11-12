@@ -78,6 +78,39 @@ with TestClient(app, base_url=BASE) as c:
     ok(f'E14 tools/list over /mcp ({len(names)} tools, the new ones included)', 'search_console_query' in names and 'send_gmail_message' in names or 'search_console_query' in names, names[:5])
     r = c.post('/mcp', json={'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': 'get_time', 'arguments': {'timezone': 'America/New_York'}}}, headers=hb)
     ok('E15 a tool call runs through /mcp', r.status_code == 200 and not r.json()['result'].get('isError') and 'America/New_York' in r.text, r.text[:300])
+    all_names = set(names)
+    ok(f'E15a /mcp lists every tool, the six markdown ones included ({len(all_names)})', len(all_names) == 113 and {'markdown_list_files', 'markdown_read', 'markdown_create', 'markdown_insert', 'markdown_remove_text', 'markdown_replace_text'} <= all_names, len(all_names))
+    covered = {'get_time'}
+    for slug, prefix in [('gmail', 'gmail_'), ('calendar', 'calendar_'), ('drive', 'drive_'), ('docs', 'docs_'), ('sheets', 'sheets_'), ('tasks', 'tasks_'), ('search-console', 'search_console_'), ('analytics', 'analytics_'), ('markdown', 'markdown_')]:
+        path = f'/{slug}/mcp'
+        r = c.post(path, json=init, headers=h)
+        www = r.headers.get('www-authenticate', '')
+        ok(f'P1 {path} with no token: 401 pointing at its own resource metadata', r.status_code == 401 and f'oauth-protected-resource/{slug}/mcp' in www, (r.status_code, www))
+        r = c.get(f'/.well-known/oauth-protected-resource/{slug}/mcp')
+        ok(f'P2 {path} metadata names {path} as the resource and this server as the authorization server', r.status_code == 200 and r.json()['resource'].rstrip('/') == BASE + path and r.json()['authorization_servers'][0].rstrip('/') == BASE, r.text)
+        r = c.post(path, json=init, headers=hb)
+        ok(f'P3 {path} initialize with the same token', r.status_code == 200 and r.json()['result'].get('instructions'), r.text[:200])
+        r = c.post(path, json={'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}, headers=hb)
+        pn = {t['name'] for t in r.json()['result']['tools']}
+        covered |= pn
+        ok(f'P4 {path} lists only its own tools ({len(pn) - 1} + get_time)', len(pn) > 1 and all(n == 'get_time' or n.startswith(prefix) for n in pn) and pn == {n for n in all_names if n == 'get_time' or n.startswith(prefix)}, sorted(pn)[:8])
+    ok('P5 the product endpoints together cover every tool on /mcp', covered == all_names, sorted(all_names - covered))
+    r = c.post('/markdown/mcp', json={'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {'name': 'gmail_get_profile', 'arguments': {}}}, headers=hb)
+    ok('P6 a tool from another product cannot be called through /markdown/mcp', r.status_code == 200 and (r.json().get('error') or r.json()['result'].get('isError')), r.text[:200])
+    r = c.get('/health')
+    ok('P7 /health lists the product addresses', r.json().get('product_urls', {}).get('markdown') == BASE + '/markdown/mcp', r.text)
+    # A connector added at /gmail/mcp signs in with resource=<that address>.
+    EMAIL['v'] = 'owner@example.com'
+    v2 = secrets.token_urlsafe(48)
+    ch2 = base64.urlsafe_b64encode(hashlib.sha256(v2.encode()).digest()).decode().rstrip('=')
+    r = c.get('/authorize', params={'response_type': 'code', 'client_id': cid, 'redirect_uri': REDIR, 'code_challenge': ch2, 'code_challenge_method': 'S256', 'state': 's2', 'scope': 'claudeai', 'resource': BASE + '/gmail/mcp'}, follow_redirects=False)
+    pend = parse_qs(urlparse(r.headers.get('location', '')).query).get('state', [None])[0]
+    r2 = c.get('/oauth/callback', params={'state': pend, 'code': 'google-code'}, follow_redirects=False)
+    code2 = parse_qs(urlparse(r2.headers.get('location', '')).query).get('code', [None])[0]
+    r = c.post('/token', data={'grant_type': 'authorization_code', 'code': code2, 'redirect_uri': REDIR, 'client_id': cid, 'client_secret': csec, 'code_verifier': v2, 'resource': BASE + '/gmail/mcp'})
+    gtok = r.json().get('access_token')
+    r = c.post('/gmail/mcp', json={'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'}, headers=dict(h, Authorization='Bearer ' + str(gtok)))
+    ok('P8 a sign-in made for /gmail/mcp (resource=that address) works there', gtok and r.status_code == 200 and any(t['name'].startswith('gmail_') for t in r.json()['result']['tools']), (r.status_code, r.text[:200]))
     r = c.get('/oauth/start', follow_redirects=False)
     ok('E16 after the first /mcp connection the old /oauth/start is closed', r.status_code == 410, r.status_code)
     r = c.get('/sse')
