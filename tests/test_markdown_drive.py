@@ -244,3 +244,17 @@ async def test_tool_returns_json_errors():
     out = await server._tool_manager.call_tool('markdown_remove_text', {'file': ID_IN, 'text': 'x'})
     data = json.loads(out)
     assert data['success'] is False and 'appears 2 times' in data['error']
+
+
+def test_google_doc_named_md_is_not_markdown(drive):
+    # Drive keeps an uploaded .md that was opened in Docs as a Google Doc still named
+    # "x.md"; it has no raw text, and the raw download fails with a 403.
+    gdoc = 'google-doc-named-md-00001'
+    drive.add(gdoc, 'Policy.md', '', mime='application/vnd.google-apps.document')
+    md = MarkdownDrive(lambda: drive, FOLDER)
+    assert not M.is_markdown(drive.meta[gdoc])
+    with pytest.raises(MarkdownError, match='is a Google Doc'):
+        md.read(gdoc)
+    with pytest.raises(MarkdownError, match='is a Google Doc'):
+        md.edit(gdoc, lambda t: t + 'x')
+    assert gdoc not in [f['id'] for f in md.list_files()]

@@ -141,7 +141,19 @@ def diff_summary(before: str, after: str) -> Dict[str, Any]:
     return {'lines_added': added, 'lines_removed': removed, 'line_count': len(b)}
 
 
+GOOGLE_APPS_PREFIX = 'application/vnd.google-apps.'
+
+
+def is_google_doc(meta: Dict[str, Any]) -> bool:
+    """A Google Docs/Sheets/etc. file. Drive keeps an uploaded .md that was opened
+    in Docs as a Google Doc still NAMED "x.md"; it has no raw text to download or
+    upload, so it is never a Markdown file here."""
+    return (meta.get('mimeType') or '').startswith(GOOGLE_APPS_PREFIX)
+
+
 def is_markdown(meta: Dict[str, Any]) -> bool:
+    if is_google_doc(meta):
+        return False
     name = (meta.get('name') or '').lower()
     return name.endswith(MD_SUFFIXES) or meta.get('mimeType') in MD_MIME_TYPES
 
@@ -184,6 +196,9 @@ class MarkdownDrive:
     def _check(self, meta: Dict[str, Any]) -> Dict[str, Any]:
         if meta.get('trashed'):
             raise MarkdownError(f"{meta.get('name')} is in the trash.")
+        if is_google_doc(meta):
+            raise MarkdownError(f"{meta.get('name')} is a Google Doc, not a Markdown file (it was converted "
+                                "when opened in Docs). Use the docs_* tools for it, or edit the original .md file.")
         if not is_markdown(meta):
             raise MarkdownError(f"{meta.get('name')} is not a Markdown file; only .md files can be read or edited here.")
         if self.folder_id and self.folder_id not in (meta.get('parents') or []):
