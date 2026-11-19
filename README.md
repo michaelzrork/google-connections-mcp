@@ -99,9 +99,9 @@ Each user deploys their own instance with their own credentials - your data stay
 
 ### 3. Connect your AI app
 
-**Claude:** Settings → Connectors → Add custom connector, URL `https://your-railway-url/mcp`. Claude opens Google's sign-in: sign in as `OWNER_EMAIL` and approve. (Unverified app? Choose **Advanced → Go to (app name)**.)
+**Claude:** Settings → Connectors → **+ Add** → **Add Custom Connector**. Name it, paste `https://your-railway-url/mcp`, and tap **Continue**. The next screen comes filled in (**Sign in now** and **Use Claude's published identity**, marked Detected): leave it and tap **Add**. Claude opens Google's sign-in: sign in as `OWNER_EMAIL` and approve. (Unverified app? Choose **Advanced → Go to (app name)**.)
 
-**ChatGPT** (website): Settings → Apps & Connectors → add a custom MCP server with the same URL, Authentication **OAuth**.
+**ChatGPT** (on the website; the ChatGPT app can't add custom servers): **Plugins** → **Add** → **Add Custom MCP Server**. Name it, optionally add an icon (download one from `/icons/<name>.png`), leave **Server URL** selected and paste the same URL, leave Authentication on **OAuth**, tick **I understand and want to continue**, then **Create as a Plugin** and **Connect**.
 
 **One product per connector (optional):** besides `/mcp` (every tool), each product has its own address with only its tools: `/gmail/mcp`, `/calendar/mcp`, `/drive/mcp`, `/docs/mcp`, `/sheets/mcp`, `/tasks/mcp`, `/search-console/mcp`, `/analytics/mcp` and `/markdown/mcp`. Add any of them as its own connector the same way. They share one sign-in and one Google token, so connecting a second one asks you to sign in again but changes nothing else. Smaller toolsets help a lot with small local models, and an app only gets the products you give it. (Google itself grants the same permissions to all of them: the split is in which tools each address offers.)
 
