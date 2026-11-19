@@ -5,14 +5,32 @@ Handles authentication for all Google services
 
 import os
 import json
+from contextvars import ContextVar
+from typing import Optional
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport.requests import Request as GoogleRequest
 from googleapiclient.discovery import build
 import gspread
 
-from google_connections_mcp.oauth_config import ALL_SCOPES
+from google_connections_mcp.oauth_config import ALL_SCOPES, ANALYTICS_GUEST_SCOPES, is_invited_guest
 from google_connections_mcp.token_store import get_store
+
+
+# Whose Google account the current request acts for. None = the owner (the
+# default, and what every request had before guests existed). A guest's email
+# when the request came in on /analytics/mcp with a guest's MCP token.
+#
+# Set per request by the gate that sits right after the bearer-token check
+# (server.py, _GuestGate), and read here. A ContextVar, not an attribute on the
+# shared GoogleAuthManager: every request runs in its own asyncio task with its
+# own copy of the context, so two calls in flight at once each see their own
+# value and one user's credentials can never be handed to another's call.
+current_guest: ContextVar[Optional[str]] = ContextVar('current_guest', default=None)
+
+
+class GuestNotAllowed(Exception):
+    """A guest request reached something only the owner may use."""
 
 
 class GoogleAuthManager:
@@ -63,8 +81,44 @@ class GoogleAuthManager:
                 return False
         return True
     
+    def _guest_credentials(self, email):
+        """A guest's own Google credentials, from the store, refreshed and saved
+        back under the guest when expired. Built fresh per call (no shared
+        object), so nothing about one guest can linger into another call."""
+        if not is_invited_guest(email):
+            # Taken off GUEST_EMAILS: cut off now, whatever tokens are out there.
+            raise GuestNotAllowed(f"{email} is no longer invited to this server.")
+        store = get_store()
+        info = store.guest_token(email)
+        if not info:
+            raise Exception("No Google sign-in saved for this account. Reconnect the connector.")
+        creds = Credentials.from_authorized_user_info(
+            info, None if info.get('scopes') else ANALYTICS_GUEST_SCOPES)
+        if not creds.valid:
+            if not creds.refresh_token:
+                raise Exception("Your Google sign-in has expired. Reconnect the connector.")
+            try:
+                creds.refresh(GoogleRequest())
+            except Exception as e:
+                raise Exception(f"Your Google sign-in could not be refreshed ({e}). Reconnect the connector.")
+            try:
+                store.set_guest_token(email, json.loads(creds.to_json()))
+            except Exception as e:
+                print(f"Could not save a guest's refreshed token: {e}")
+        return creds
+
+    def _owner_only(self):
+        if current_guest.get():
+            raise GuestNotAllowed("Guests can use only the Google Analytics tools.")
+
     def get_credentials(self):
-        """Get valid credentials, refreshing if necessary"""
+        """Get valid credentials, refreshing if necessary.
+
+        The owner's (the single stored google_token, exactly as before) unless
+        this request belongs to a guest on /analytics/mcp."""
+        guest = current_guest.get()
+        if guest:
+            return self._guest_credentials(guest)
         if not self.credentials or not self.credentials.valid:
             if not self._refresh_if_needed():
                 raise Exception("No valid credentials. Visit /oauth/start to authorize")
@@ -87,36 +141,43 @@ class GoogleAuthManager:
     
     def get_calendar_service(self):
         """Get authenticated Google Calendar service"""
+        self._owner_only()
         creds = self.get_credentials()
         return build('calendar', 'v3', credentials=creds)
     
     def get_gmail_service(self):
         """Get authenticated Gmail service"""
+        self._owner_only()
         creds = self.get_credentials()
         return build('gmail', 'v1', credentials=creds)
     
     def get_drive_service(self):
         """Get authenticated Google Drive service"""
+        self._owner_only()
         creds = self.get_credentials()
         return build('drive', 'v3', credentials=creds)
     
     def get_docs_service(self):
         """Get authenticated Google Docs service"""
+        self._owner_only()
         creds = self.get_credentials()
         return build('docs', 'v1', credentials=creds)
     
     def get_sheets_service(self):
         """Get authenticated Google Sheets service (API client)"""
+        self._owner_only()
         creds = self.get_credentials()
         return build('sheets', 'v4', credentials=creds)
     
     def get_sheets_client(self):
         """Get gspread client for Google Sheets"""
+        self._owner_only()
         creds = self.get_credentials()
         return gspread.authorize(creds)
     
     def get_tasks_service(self):
         """Get authenticated Google Tasks service"""
+        self._owner_only()
         creds = self.get_credentials()
         return build('tasks', 'v1', credentials=creds)
     
@@ -128,6 +189,7 @@ class GoogleAuthManager:
 
     def get_search_console_service(self):
         """Get authenticated Search Console service"""
+        self._owner_only()
         creds = self.get_credentials()
         return build('searchconsole', 'v1', credentials=creds)
 
@@ -143,6 +205,7 @@ class GoogleAuthManager:
 
     def get_keep_service(self):
         """Get authenticated Google Keep service"""
+        self._owner_only()
         creds = self.get_credentials()
         return build('keep', 'v1', credentials=creds)
 

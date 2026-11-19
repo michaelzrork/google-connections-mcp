@@ -13,7 +13,10 @@ What it holds:
   access       access tokens, by SHA-256 of the token (never the token itself)
   refresh      refresh tokens, same
   pending      sign-ins waiting on Google
-  google_token the Google credentials (refresh token included)
+  google_token the OWNER's Google credentials (refresh token included)
+  guests       invited guests' own Google credentials, by lowercase email
+               (only for /analytics/mcp; see GUEST_EMAILS). Kept beside
+               google_token, never in it, so the owner's token is untouched.
   connected_at when an AI app first connected through the new sign-in; the
                old open /sse endpoint switches itself off from then on
 """
@@ -49,7 +52,7 @@ class TokenStore:
         self.path = os.path.join(self.dir, 'mcp_store.json')
         self._lock = threading.RLock()
         self._data: Dict[str, Any] = {s: {} for s in self.SECTIONS}
-        self._data.update({'google_token': None, 'connected_at': None})
+        self._data.update({'google_token': None, 'connected_at': None, 'guests': {}})
         self._load()
 
     # -- file ----------------------------------------------------------------
@@ -61,6 +64,7 @@ class TokenStore:
                 self._data[s] = data.get(s) or {}
             self._data['google_token'] = data.get('google_token')
             self._data['connected_at'] = data.get('connected_at')
+            self._data['guests'] = data.get('guests') or {}
         except FileNotFoundError:
             pass
         except Exception as e:  # a corrupt file must not take the server down
@@ -135,6 +139,17 @@ class TokenStore:
     def set_google_token(self, token_info: Dict[str, Any]) -> None:
         with self._lock:
             self._data['google_token'] = token_info
+            self._save()
+
+    # -- guests' Google tokens (beside the owner's, never replacing it) -------
+    def guest_token(self, email: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            v = self._data['guests'].get((email or '').lower())
+            return dict(v) if isinstance(v, dict) else None
+
+    def set_guest_token(self, email: str, token_info: Dict[str, Any]) -> None:
+        with self._lock:
+            self._data['guests'][email.lower()] = token_info
             self._save()
 
     # -- the legacy switch -----------------------------------------------------

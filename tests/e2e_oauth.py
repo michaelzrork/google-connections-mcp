@@ -21,7 +21,11 @@ class FakeFlow:
         assert code == 'google-code'
         payload = base64.urlsafe_b64encode(json.dumps({'email': EMAIL['v'], 'email_verified': True}).encode()).decode().rstrip('=')
         self.oauth2session.token = {'id_token': 'h.' + payload + '.s'}
-MO._google_flow = lambda state=None: FakeFlow(state)
+SCOPES_ASKED = []
+def _fake_flow(state=None, scopes=None):
+    SCOPES_ASKED.append(list(scopes or []))
+    return FakeFlow(state)
+MO._google_flow = _fake_flow
 
 import google_connections_mcp.server as S
 from starlette.testclient import TestClient

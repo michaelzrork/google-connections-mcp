@@ -109,6 +109,26 @@ To grant new Google permissions later (after a scope is added to `oauth_config.p
 
 You're done!
 
+### Guests on /analytics/mcp
+
+You can let invited people connect **their own** Google account to `/analytics/mcp`, and nothing else. For example, a friend connects his own Google Analytics to his own Claude through your server. A guest sees only the GA4 properties their own Google account can see. They never touch your token, your Gmail, Drive or anything else, and `GA4_PROPERTY_ID` (your default property) is never applied for them.
+
+**How it works.** The sign-in for `/analytics/mcp` is told apart from the others by the `resource` parameter the AI app sends to `/authorize` (RFC 8707: an MCP client names the address it's connecting to, and Claude does). When it's `/analytics/mcp` and `GUEST_EMAILS` has anyone in it, Google is asked for only `openid`, `email` and Analytics (read only). After Google:
+- **You** (`OWNER_EMAIL`): signed in as always. Your saved Google token is kept as it is; a sign-in for the analytics address never replaces it with the narrower one.
+- **An invited guest**: their Google token is saved under their email, beside yours, and their connector's tokens work **only** at `/analytics/mcp`. Every other address, `/mcp` included, refuses them (401/403).
+- **Anyone else**, or a guest connecting any other address: "This server belongs to someone else", and nothing is saved.
+
+With `GUEST_EMAILS` empty nothing changes: the analytics address asks for every permission and only you can sign in.
+
+**Set it up (owner):**
+1. Railway → the service → Variables → `GUEST_EMAILS` = `friend@example.com` (several: comma-separated; letter case doesn't matter). Railway redeploys; your own connection is unaffected.
+2. If the OAuth app is still in **Testing** (Google Cloud Console → APIs & Services → OAuth consent screen), add the guest under **Test users**, or Google won't let them sign in. In Testing mode refresh tokens expire after **7 days**, so the guest would have to reconnect weekly; publishing the app to Production avoids that. The Google Analytics Data API (and Admin API, for `analytics_list_properties`) must be enabled in the project, as for you.
+3. Send the guest the address: `https://your-railway-url/analytics/mcp`.
+
+**Connect (guest):** Claude → Settings → Connectors → Add custom connector, URL `https://your-railway-url/analytics/mcp`. Sign in with your own Google account and approve read-only Analytics (unverified app: **Advanced → Go to (app name)**). Then ask Claude to run `analytics_list_properties` and use the numeric property ID it gives.
+
+**Cutting someone off:** remove their email from `GUEST_EMAILS`. The invite list is checked every time a guest's token is used, so their next request is refused (and their connector can't refresh). Their saved Google token stays in the store unused; they can also remove the app's access in their Google Account → Security → Third-party connections.
+
 ### Moving from the old `/sse` setup
 
 Older installs connected to `/sse` with no sign-in, using a `GOOGLE_TOKEN_JSON` copied from the logs. Both keep working until an AI app first connects through `/mcp`; after that `/sse`, `/messages` and `/oauth/start` answer **410 Gone** for good, because `/sse` lets anyone with the URL use your Google account. Steps: add the volume and `OWNER_EMAIL`/`DATA_DIR`, deploy, then replace the connector's URL with `/mcp` and sign in. `GOOGLE_TOKEN_JSON` can be deleted once that works (the sign-in saves its own token). `LEGACY_SSE=on` or `off` overrides the automatic switch.
@@ -386,6 +406,7 @@ On Windows use full paths (`C:\\Users\\you\\...`), and if `markdown-drive-mcp` i
 | `LEGACY_SSE` | No | `on` / `off` to force the old `/sse` endpoint; by default it closes after the first `/mcp` connection |
 | `SEARCH_CONSOLE_SITE` | No | Default Search Console property for the Search Console tools |
 | `GA4_PROPERTY_ID` | No | Default numeric GA4 property ID for the Analytics tools |
+| `GUEST_EMAILS` | No | Comma-separated Google accounts invited to connect their OWN account to `/analytics/mcp` only (see "Guests on /analytics/mcp"). Empty: owner only |
 | `MARKDOWN_FOLDER_ID` | No | The only Drive folder the `markdown_*` tools may use (the id from the folder's URL). Without it they reach every `.md` file |
 | `PORT` | No | Server port (default: 8000) |
 
@@ -396,7 +417,7 @@ On Windows use full paths (`C:\\Users\\you\\...`), and if `markdown-drive-mcp` i
 | Endpoint | Description |
 |----------|-------------|
 | `/mcp` | MCP endpoint (Streamable HTTP, sign-in required): what your AI app connects to |
-| `/gmail/mcp`, `/calendar/mcp`, `/drive/mcp`, `/docs/mcp`, `/sheets/mcp`, `/tasks/mcp`, `/search-console/mcp`, `/analytics/mcp`, `/markdown/mcp` | The same, with only that product's tools (plus `get_time`) |
+| `/gmail/mcp`, `/calendar/mcp`, `/drive/mcp`, `/docs/mcp`, `/sheets/mcp`, `/tasks/mcp`, `/search-console/mcp`, `/analytics/mcp`, `/markdown/mcp` | The same, with only that product's tools (plus `get_time`). `/analytics/mcp` also accepts invited guests on their own Google account |
 | `/.well-known/oauth-protected-resource/<path>`, `/.well-known/oauth-authorization-server` | OAuth discovery (one protected-resource document per endpoint) |
 | `/register`, `/authorize`, `/token`, `/revoke` | OAuth 2.1: client registration, sign-in, tokens, revocation |
 | `/oauth/callback` | Google's redirect back after sign-in |
@@ -411,7 +432,7 @@ Make sure you've published your OAuth app to Production in Google Cloud Console.
 ### Can't connect from Claude
 - Check that your Railway deployment is running (`/health` endpoint should return `{"status": "ok"}`)
 - Verify the URL ends in `/mcp`
-- "This server belongs to someone else": you signed in with a Google account other than `OWNER_EMAIL`
+- "This server belongs to someone else": you signed in with a Google account other than `OWNER_EMAIL` (or, as a guest, at an address other than `/analytics/mcp`, or with an email not in `GUEST_EMAILS`)
 - Signed out after every deploy: the volume isn't mounted, or `DATA_DIR` doesn't point at it (`/health` shows `storage_persistent`)
 - Check Railway logs for errors
 

@@ -17,7 +17,8 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, ConfigDict
 import pandas as pd
 
-from google_connections_mcp.auth_manager import get_auth_manager, create_oauth_flow
+from google_connections_mcp.auth_manager import get_auth_manager, create_oauth_flow, current_guest
+from google_connections_mcp.oauth_config import ANALYTICS_GUEST_PATH, ANALYTICS_GRANT, is_invited_guest
 from google_connections_mcp.mcp_oauth import GoogleOAuthProvider, MCP_SCOPE, public_url
 from google_connections_mcp.token_store import get_store
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
@@ -4210,6 +4211,11 @@ def _scope_error(scope: str, what: str) -> Optional[str]:
             return None
     except Exception:
         return None  # let the API call report the real problem
+    if current_guest.get():
+        return json.dumps({
+            "success": False,
+            "error": f"Your Google sign-in wasn't granted access to {what}. Reconnect the connector and approve it."
+        }, indent=2)
     return json.dumps({
         "success": False,
         "error": f"This Google token wasn't granted access to {what}. Visit /oauth/start on this server, "
@@ -4225,7 +4231,15 @@ def _sc_site(site_url: Optional[str]) -> str:
 
 
 def _ga_property(property_id: Optional[str]) -> str:
-    pid = (property_id or os.environ.get('GA4_PROPERTY_ID') or '').strip()
+    if current_guest.get():
+        # GA4_PROPERTY_ID is the OWNER's default property. A guest sees only
+        # what their own Google account can, so they always name their own.
+        pid = (property_id or '').strip()
+        if not pid:
+            raise ValueError("No property given. Run analytics_list_properties to find your property's "
+                             "numeric ID, then pass it as property_id.")
+    else:
+        pid = (property_id or os.environ.get('GA4_PROPERTY_ID') or '').strip()
     if not pid:
         raise ValueError("No property given. Pass property_id (see analytics_list_properties) or set GA4_PROPERTY_ID.")
     if pid.upper().startswith('G-'):
@@ -4426,7 +4440,7 @@ class AnalyticsReportInput(BaseModel):
                                description="GA4 metric names, e.g. activeUsers, newUsers, sessions, screenPageViews, engagementRate, averageSessionDuration, eventCount, conversions")
     dimensions: List[str] = Field(default=[],
                                   description="GA4 dimension names, e.g. date, pagePath, pageTitle, landingPage, sessionSource, sessionMedium, sessionDefaultChannelGroup, country, deviceCategory, eventName")
-    property_id: Optional[str] = Field(default=None, description="Numeric GA4 property ID; defaults to GA4_PROPERTY_ID")
+    property_id: Optional[str] = Field(default=None, description="Numeric GA4 property ID from analytics_list_properties (the owner may have a default set)")
     filter_dimension: Optional[str] = Field(default=None, description="Only rows where this dimension...")
     filter_value: Optional[str] = Field(default=None, description="...matches this value")
     filter_match: str = Field(default="EXACT", description="EXACT, BEGINS_WITH, ENDS_WITH, CONTAINS or FULL_REGEXP")
@@ -4643,15 +4657,23 @@ PRODUCTS = [
     ('search-console', 'Search Console', ('search_console_',),
      "Read-only Google Search Console. search_console_list_sites gives the site_url to use; data is 2-3 days behind."),
     ('analytics', 'Analytics', ('analytics_',),
-     "Read-only Google Analytics (GA4). Use the numeric property ID from analytics_list_properties, never the G-XXXX measurement ID."),
+     "Read-only Google Analytics (GA4) for your Google account: only the properties your account can see. "
+     "Run analytics_list_properties first and use the numeric property ID it gives, never the G-XXXX measurement ID."),
     ('markdown', 'Markdown', ('markdown_',), MARKDOWN_INSTRUCTIONS.strip()),
 ]
 
 
+# /analytics/mcp is also used by invited guests on their own Google account,
+# so it talks about "your" account and time zone, not the owner's.
+_COMMON_ANALYTICS = ("Call get_time for today's date and your time zone. Every tool returns JSON "
+                     "with \"success\"; when it's false, report the error plainly.")
+
+
 def _product_server(slug: str, title: str, prefixes, instructions: str) -> FastMCP:
+    common = _COMMON_ANALYTICS if slug == 'analytics' else _COMMON
     server = FastMCP(
         f"Google Connections: {title}",
-        instructions=f"{instructions}\n\n{_COMMON}",
+        instructions=f"{instructions}\n\n{common}",
         auth_server_provider=oauth_provider,
         auth=AuthSettings(
             issuer_url=public_url(),
@@ -4675,6 +4697,72 @@ def _product_server(slug: str, title: str, prefixes, instructions: str) -> FastM
 
 product_servers = {slug: _product_server(slug, title, prefixes, text)
                    for slug, title, prefixes, text in PRODUCTS}
+
+
+# ============================================================================
+# GUESTS: WHO A REQUEST ACTS FOR, AND WHERE A GUEST TOKEN MAY GO
+# ============================================================================
+
+class _GuestGate:
+    """Wraps each MCP endpoint, right after the SDK's bearer-token check.
+
+    The SDK's AuthenticationMiddleware has already verified the token
+    (GoogleOAuthProvider.load_access_token) and put it on scope['user']. Here:
+      - a guest-tagged token is refused on every endpoint except
+        /analytics/mcp (403), and refused once its email is off GUEST_EMAILS
+        (401; load_access_token already returns None for that, this is the
+        belt to its braces);
+      - the request's principal goes into the current_guest contextvar, which
+        auth_manager reads to pick the Google credentials. Set and reset
+        around this one request: the owner's requests get None explicitly, so
+        nothing from another request can be inherited.
+    """
+
+    def __init__(self, app, path: str):
+        self.app = app
+        self.path = path
+
+    async def __call__(self, scope, receive, send):
+        user = scope.get('user')
+        tok = getattr(user, 'access_token', None)
+        guest = getattr(tok, 'guest', None) if tok is not None else None
+        if guest:
+            if self.path != ANALYTICS_GUEST_PATH or getattr(tok, 'grant', None) != ANALYTICS_GRANT:
+                await _auth_error(send, 403, 'insufficient_scope',
+                                  f'Guest sign-ins work only at {ANALYTICS_GUEST_PATH}.')
+                return
+            if not is_invited_guest(guest):
+                await _auth_error(send, 401, 'invalid_token', 'This account is no longer invited.')
+                return
+        reset = current_guest.set(guest or None)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            current_guest.reset(reset)
+
+
+async def _auth_error(send, status: int, error: str, description: str):
+    body = json.dumps({'error': error, 'error_description': description}).encode()
+    await send({'type': 'http.response.start', 'status': status, 'headers': [
+        (b'content-type', b'application/json'),
+        (b'content-length', str(len(body)).encode()),
+        (b'www-authenticate', f'Bearer error="{error}", error_description="{description}"'.encode()),
+    ]})
+    await send({'type': 'http.response.body', 'body': body})
+
+
+def _gate_mcp_endpoints(app) -> None:
+    """Put _GuestGate in front of /mcp and every /<product>/mcp."""
+    paths = {'/mcp'} | {f'/{slug}/mcp' for slug in product_servers}
+    gated = set()
+    for route in app.router.routes:
+        path = getattr(route, 'path', None)
+        if path in paths and hasattr(route, 'app'):
+            route.app = _GuestGate(route.app, path)
+            gated.add(path)
+    missing = paths - gated
+    if missing:  # never serve an endpoint a guest token could slip into
+        raise RuntimeError(f"MCP endpoints without the guest gate: {sorted(missing)}")
 
 
 # ============================================================================
@@ -4712,6 +4800,8 @@ def build_app():
             yield
 
     app.router.lifespan_context = lifespan
+
+    _gate_mcp_endpoints(app)
 
     # The old SSE transport, unauthenticated, kept only until /mcp is in use.
     sse = SseServerTransport("/messages/")
