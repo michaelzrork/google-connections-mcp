@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, ConfigDict
 import pandas as pd
 
 from google_connections_mcp.auth_manager import get_auth_manager, create_oauth_flow, current_guest
-from google_connections_mcp.oauth_config import ANALYTICS_GUEST_PATH, ANALYTICS_GRANT, is_invited_guest
+from google_connections_mcp.oauth_config import ANALYTICS_GUEST_PATH, ANALYTICS_GRANT
 from google_connections_mcp.mcp_oauth import GoogleOAuthProvider, MCP_SCOPE, public_url
 from google_connections_mcp.token_store import get_store
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
@@ -4663,7 +4663,7 @@ PRODUCTS = [
 ]
 
 
-# /analytics/mcp is also used by invited guests on their own Google account,
+# /analytics/mcp is also used by guests on their own Google account,
 # so it talks about "your" account and time zone, not the owner's.
 _COMMON_ANALYTICS = ("Call get_time for today's date and your time zone. Every tool returns JSON "
                      "with \"success\"; when it's false, report the error plainly.")
@@ -4709,9 +4709,7 @@ class _GuestGate:
     The SDK's AuthenticationMiddleware has already verified the token
     (GoogleOAuthProvider.load_access_token) and put it on scope['user']. Here:
       - a guest-tagged token is refused on every endpoint except
-        /analytics/mcp (403), and refused once its email is off GUEST_EMAILS
-        (401; load_access_token already returns None for that, this is the
-        belt to its braces);
+        /analytics/mcp (403);
       - the request's principal goes into the current_guest contextvar, which
         auth_manager reads to pick the Google credentials. Set and reset
         around this one request: the owner's requests get None explicitly, so
@@ -4730,9 +4728,6 @@ class _GuestGate:
             if self.path != ANALYTICS_GUEST_PATH or getattr(tok, 'grant', None) != ANALYTICS_GRANT:
                 await _auth_error(send, 403, 'insufficient_scope',
                                   f'Guest sign-ins work only at {ANALYTICS_GUEST_PATH}.')
-                return
-            if not is_invited_guest(guest):
-                await _auth_error(send, 401, 'invalid_token', 'This account is no longer invited.')
                 return
         reset = current_guest.set(guest or None)
         try:

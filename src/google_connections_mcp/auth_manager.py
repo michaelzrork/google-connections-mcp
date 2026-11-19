@@ -13,7 +13,7 @@ from google.auth.transport.requests import Request as GoogleRequest
 from googleapiclient.discovery import build
 import gspread
 
-from google_connections_mcp.oauth_config import ALL_SCOPES, ANALYTICS_GUEST_SCOPES, is_invited_guest
+from google_connections_mcp.oauth_config import ALL_SCOPES, ANALYTICS_GUEST_SCOPES
 from google_connections_mcp.token_store import get_store
 
 
@@ -85,9 +85,6 @@ class GoogleAuthManager:
         """A guest's own Google credentials, from the store, refreshed and saved
         back under the guest when expired. Built fresh per call (no shared
         object), so nothing about one guest can linger into another call."""
-        if not is_invited_guest(email):
-            # Taken off GUEST_EMAILS: cut off now, whatever tokens are out there.
-            raise GuestNotAllowed(f"{email} is no longer invited to this server.")
         store = get_store()
         info = store.guest_token(email)
         if not info:

@@ -15,20 +15,19 @@ How a connection goes (Claude, ChatGPT, any MCP client):
   5. The client trades the code for an access token (1 hour) and a refresh
      token (90 days, replaced on every use) at /token, and calls /mcp with it.
 
-Guests (GUEST_EMAILS) on /analytics/mcp only. Which endpoint a sign-in is for
+Guests (any Google account but the owner's) on /analytics/mcp only. Which endpoint a sign-in is for
 is known before Google from the `resource` parameter of /authorize (RFC 8707:
 MCP clients must send the address of the server they're connecting to, and the
 SDK hands it to authorize() in AuthorizationParams). When it is /analytics/mcp
-and there is at least one guest, Google is asked for only openid, email and
+Google is asked for only openid, email and
 analytics.readonly. At the callback:
   - the owner keeps today's flow; through the narrow analytics sign-in their
     stored (broad) google_token is never replaced, and the MCP token is the
     owner's as always;
-  - an invited guest on the analytics sign-in gets their Google token saved
+  - any other account on the analytics sign-in is a guest: it gets their Google token saved
     under guests[email] and MCP tokens tagged {guest: email, grant: analytics};
-  - anyone else, or a guest on any other endpoint, is refused, nothing saved.
-A guest-tagged token only works on /analytics/mcp (server.py, _GuestGate), and
-stops working as soon as the email leaves GUEST_EMAILS (load_access_token).
+  - a non-owner on any other endpoint is refused, and nothing is saved.
+A guest-tagged token only works on /analytics/mcp (server.py, _GuestGate).
 
 So reconnecting the connector in claude.ai is also how new Google permissions
 are granted: one sign-in does both. The MCP SDK (mcp.server.auth) supplies the
@@ -62,7 +61,6 @@ from urllib.parse import urlparse
 
 from google_connections_mcp.oauth_config import (
     ALL_SCOPES, ANALYTICS_GRANT, ANALYTICS_GUEST_PATH, ANALYTICS_GUEST_SCOPES,
-    guest_emails, is_invited_guest,
 )
 from google_connections_mcp.token_store import get_store, token_hash
 
@@ -127,10 +125,9 @@ def flow_for_resource(resource: Optional[str]) -> str:
 
     By the RFC 8707 `resource` the MCP client sends (the connector's address).
     Only the path counts: the host is this server whatever spelling the client
-    used. No guests configured, or no resource sent, means the full sign-in,
-    exactly as before guests existed.
+    used. No resource sent means the full sign-in (owner only), as before.
     """
-    if not guest_emails() or not resource:
+    if not resource:
         return FLOW_FULL
     try:
         path = urlparse(str(resource)).path.rstrip('/')
@@ -275,7 +272,7 @@ class GoogleOAuthProvider:
                 self._save_owner_token(creds)
             else:
                 print("[mcp_oauth] owner signed in through the analytics sign-in; kept the existing Google token")
-        elif email and flow_kind == FLOW_ANALYTICS and is_invited_guest(email):
+        elif email and flow_kind == FLOW_ANALYTICS:
             guest = email
             info = json.loads(creds.to_json())
             if not info.get('refresh_token'):
@@ -347,17 +344,12 @@ class GoogleOAuthProvider:
         row = self.store.pop('codes', authorization_code.code)
         if not row:
             raise TokenError('invalid_grant', 'That code was already used.')
-        guest = row.get('guest')
-        if guest and not is_invited_guest(guest):
-            raise TokenError('invalid_grant', 'This account is no longer invited.')
         return self._issue(client.client_id, authorization_code.scopes, authorization_code.resource,
-                           guest=guest, grant=row.get('grant'))
+                           guest=row.get('guest'), grant=row.get('grant'))
 
     async def load_refresh_token(self, client: OAuthClientInformationFull, refresh_token: str) -> Optional[RefreshToken]:
         row = self.store.get('refresh', token_hash(refresh_token))
         if not row or row['client_id'] != client.client_id or row['expires_at'] < time.time():
-            return None
-        if row.get('guest') and not is_invited_guest(row['guest']):
             return None
         return RefreshToken(token=refresh_token, client_id=row['client_id'], scopes=row['scopes'], expires_at=row['expires_at'])
 
@@ -367,8 +359,6 @@ class GoogleOAuthProvider:
         if not row:
             raise TokenError('invalid_grant', 'Refresh token is no longer valid.')
         self.store.delete_where('access', refresh=h)  # its access tokens go with it
-        if row.get('guest') and not is_invited_guest(row['guest']):
-            raise TokenError('invalid_grant', 'This account is no longer invited.')
         return self._issue(client.client_id, row['scopes'], row.get('resource'),
                            guest=row.get('guest'), grant=row.get('grant'))
 
@@ -377,9 +367,6 @@ class GoogleOAuthProvider:
         if not row or row['expires_at'] < time.time():
             return None
         guest = row.get('guest')
-        if guest and not is_invited_guest(guest):
-            # Taken off GUEST_EMAILS: refused on the very next request.
-            return None
         return McpAccessToken(token=token, client_id=row['client_id'], scopes=row['scopes'],
                               expires_at=row['expires_at'], resource=row.get('resource'),
                               guest=guest, grant=row.get('grant'))

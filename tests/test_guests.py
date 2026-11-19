@@ -1,4 +1,4 @@
-"""Guests on /analytics/mcp: invited people connect their OWN Google account to
+"""Guests on /analytics/mcp: any Google account connects their OWN Google account to
 the analytics endpoint only, while the owner's flow and token stay as they were.
 
 Drives the real ASGI app (SDK auth routes, bearer check, the guest gate, the
@@ -28,7 +28,6 @@ os.environ.update(
         'redirect_uris': ['https://gc.example.com/oauth/callback']}}),
 )
 os.environ.pop('GOOGLE_TOKEN_JSON', None)
-os.environ.pop('GUEST_EMAILS', None)
 os.environ.pop('GA4_PROPERTY_ID', None)
 
 import httpx  # noqa: E402
@@ -151,7 +150,6 @@ def fresh(monkeypatch):
         store._save()
     S.auth._load_credentials()
     GOOGLE.asked.clear()
-    monkeypatch.delenv('GUEST_EMAILS', raising=False)
     monkeypatch.delenv('GA4_PROPERTY_ID', raising=False)
     yield
 
@@ -227,15 +225,17 @@ def test_owner_full_sign_in_unchanged_without_guests(client):
     assert out['properties'][0]['account'].startswith('g-access-owner@example.com')
 
 
-def test_owner_on_analytics_without_guests_is_todays_full_flow(client):
-    # GUEST_EMAILS empty: /analytics/mcp asks for everything, exactly as before.
+def test_owner_with_no_token_at_all_keeps_narrow_one(client):
+    # Nothing to downgrade: a fresh install connecting only /analytics/mcp
+    # keeps that token so the analytics tools work; /mcp's sign-in replaces it.
+    S.get_store().set_google_token(None)
     cb, tok = sign_in(client, 'owner@example.com', '/analytics/mcp')
-    assert tok and set(ALL_SCOPES) <= last_scopes()
+    assert tok and last_scopes() == {'openid', 'email', GA}
     assert S.get_store().google_token()['token'].startswith('g-access-owner@example.com')
+    assert not S.get_store()._data['guests']
 
 
-def test_owner_with_guests_configured_full_flow_unchanged(client, monkeypatch):
-    monkeypatch.setenv('GUEST_EMAILS', GUEST)
+def test_owner_full_flow_unchanged_on_every_other_endpoint(client, monkeypatch):
     for path in ['/mcp'] + [f'/{s}/mcp' for s in PRODUCT_SLUGS if s != 'analytics']:
         GOOGLE.asked.clear()
         cb, tok = sign_in(client, 'owner@example.com', path)
@@ -245,7 +245,6 @@ def test_owner_with_guests_configured_full_flow_unchanged(client, monkeypatch):
 
 
 def test_owner_never_downgraded_by_narrow_analytics_sign_in(client, monkeypatch):
-    monkeypatch.setenv('GUEST_EMAILS', GUEST)
     before = S.get_store().google_token()
     cb, tok = sign_in(client, 'owner@example.com', '/analytics/mcp')
     assert last_scopes() == {'openid', 'email', GA}       # the narrow sign-in
@@ -267,7 +266,6 @@ def test_existing_owner_tokens_keep_working(client, monkeypatch):
     row = store.get('access', MO.token_hash(tok['access_token']))
     row.pop('guest', None), row.pop('grant', None)
     store.put('access', MO.token_hash(tok['access_token']), row)
-    monkeypatch.setenv('GUEST_EMAILS', GUEST)
     for path in ['/mcp'] + [f'/{s}/mcp' for s in PRODUCT_SLUGS]:
         r = client.post(path, json=INIT, headers=dict(H, Authorization='Bearer ' + tok['access_token']))
         assert r.status_code == 200, path
@@ -282,8 +280,7 @@ def test_owner_instructions_and_analytics_wording(client):
 
 
 # -- guests -----------------------------------------------------------------------
-def test_invited_guest_gets_narrow_scopes_and_own_token(client, monkeypatch):
-    monkeypatch.setenv('GUEST_EMAILS', f' Someone@Example.com , {GUEST.upper()} ')
+def test_guest_gets_narrow_scopes_and_own_token(client, monkeypatch):
     owner_before = S.get_store().google_token()
     cb, tok = sign_in(client, GUEST, '/analytics/mcp')
     assert tok, cb.text
@@ -301,7 +298,6 @@ def test_invited_guest_gets_narrow_scopes_and_own_token(client, monkeypatch):
 
 
 def test_guest_refused_on_mcp_and_every_other_product(client, monkeypatch):
-    monkeypatch.setenv('GUEST_EMAILS', GUEST)
     cb, tok = sign_in(client, GUEST, '/analytics/mcp')
     hb = dict(H, Authorization='Bearer ' + tok['access_token'])
     for path in ['/mcp'] + [f'/{s}/mcp' for s in PRODUCT_SLUGS if s != 'analytics']:
@@ -325,54 +321,37 @@ def test_guest_cannot_reach_owner_only_services_even_if_called():
 
 
 def test_guest_sign_in_on_other_endpoint_is_refused_and_nothing_saved(client, monkeypatch):
-    monkeypatch.setenv('GUEST_EMAILS', GUEST)
     before = S.get_store().google_token()
     for path in ['/mcp', '/gmail/mcp', '/search-console/mcp']:
         cb, tok = sign_in(client, GUEST, path)
         assert tok is None and cb.status_code == 403, path
     cb, tok = sign_in(client, GUEST, '/analytics/mcp', send_resource=False)  # no resource: full flow
-    assert tok is None and cb.status_code == 403
+    assert tok is None and cb.status_code == 403 and 'Nothing was saved' in cb.text
     assert not S.get_store()._data['guests'] and S.get_store().google_token() == before
 
 
-def test_non_invited_email_refused(client, monkeypatch):
-    monkeypatch.setenv('GUEST_EMAILS', GUEST)
+def test_any_account_can_connect_as_guest_on_analytics_but_nowhere_else(client):
+    """No invite list: any non-owner account is a guest at /analytics/mcp, and
+    refused (nothing saved) at every other address."""
     before = S.get_store().google_token()
-    for path in ['/analytics/mcp', '/mcp']:
-        cb, tok = sign_in(client, 'stranger@example.com', path)
-        assert tok is None and cb.status_code == 403
-        assert 'Nothing was saved' in cb.text
-    assert not S.get_store()._data['guests'] and S.get_store().google_token() == before
-
-
-def test_guest_refused_when_no_guests_configured(client):
-    cb, tok = sign_in(client, GUEST, '/analytics/mcp')
-    assert tok is None and cb.status_code == 403
-    assert set(ALL_SCOPES) <= last_scopes()
-
-
-def test_removing_guest_blocks_next_call_and_refresh(client, monkeypatch):
-    monkeypatch.setenv('GUEST_EMAILS', GUEST)
-    cb, tok = sign_in(client, GUEST, '/analytics/mcp')
-    assert tool_json(call(client, '/analytics/mcp', tok['access_token'], 'analytics_list_properties'))['success']
-    monkeypatch.setenv('GUEST_EMAILS', 'someone-else@example.com')
-    r = call(client, '/analytics/mcp', tok['access_token'], 'analytics_list_properties')
-    assert r.status_code == 401
-    cid, csec = tok['_client']
-    r = client.post('/token', data={'grant_type': 'refresh_token', 'refresh_token': tok['refresh_token'],
-                                    'client_id': cid, 'client_secret': csec})
-    assert r.status_code in (400, 401)
-    # And below the HTTP layer, a guest context for them gets no credentials.
-    t = AM.current_guest.set(GUEST)
-    try:
-        with pytest.raises(AM.GuestNotAllowed):
-            S.auth.get_credentials()
-    finally:
-        AM.current_guest.reset(t)
+    for i, who in enumerate(['stranger@example.com', 'Someone.Else@Example.org', 'x@another.test']):
+        for path in ['/mcp'] + [f'/{s}/mcp' for s in PRODUCT_SLUGS if s != 'analytics']:
+            cb, tok = sign_in(client, who, path)
+            assert tok is None and cb.status_code == 403 and 'Nothing was saved' in cb.text, (who, path)
+            assert set(ALL_SCOPES) <= last_scopes()
+        assert S.get_store().guest_token(who) is None
+        cb, tok = sign_in(client, who, '/analytics/mcp')
+        assert tok and last_scopes() == {'openid', 'email', GA}, who
+        assert S.get_store().guest_token(who)['token'].startswith(f'g-access-{who.lower()}')
+        out = tool_json(call(client, '/analytics/mcp', tok['access_token'], 'analytics_list_properties'))
+        assert out['properties'][0]['account'].startswith(f'g-access-{who.lower()}')
+        for path in ['/mcp'] + [f'/{s}/mcp' for s in PRODUCT_SLUGS if s != 'analytics']:
+            assert call(client, path, tok['access_token'], 'get_time', {'timezone': 'UTC'}).status_code in (401, 403)
+    assert S.get_store().google_token() == before   # the owner's token never touched
+    assert len(S.get_store()._data['guests']) == 3
 
 
 def test_guest_refresh_keeps_guest_tag(client, monkeypatch):
-    monkeypatch.setenv('GUEST_EMAILS', GUEST)
     cb, tok = sign_in(client, GUEST, '/analytics/mcp')
     cid, csec = tok['_client']
     r = client.post('/token', data={'grant_type': 'refresh_token', 'refresh_token': tok['refresh_token'],
@@ -385,7 +364,6 @@ def test_guest_refresh_keeps_guest_tag(client, monkeypatch):
 
 
 def test_guest_refreshed_google_token_saved_under_guest(monkeypatch):
-    monkeypatch.setenv('GUEST_EMAILS', GUEST)
     store = S.get_store()
     expired = json.loads(_creds('guest-old', 'guest-refresh', [GA]).to_json())
     expired['expiry'] = '2000-01-01T00:00:00Z'
@@ -408,7 +386,6 @@ def test_guest_refreshed_google_token_saved_under_guest(monkeypatch):
 
 # -- GA4_PROPERTY_ID ----------------------------------------------------------------
 def test_ga4_property_id_not_applied_for_guests(client, monkeypatch):
-    monkeypatch.setenv('GUEST_EMAILS', GUEST)
     monkeypatch.setenv('GA4_PROPERTY_ID', '999')
     cb, tok = sign_in(client, GUEST, '/analytics/mcp')
     out = tool_json(call(client, '/analytics/mcp', tok['access_token'], 'analytics_report', {'params': {}}))
@@ -428,7 +405,6 @@ def test_ga4_property_id_not_applied_for_guests(client, monkeypatch):
 def test_contextvar_isolates_owner_and_guests_concurrently(monkeypatch):
     """Many owner and guest calls in flight at once, interleaved at every await:
     each must get its own credentials, never another's."""
-    monkeypatch.setenv('GUEST_EMAILS', f'{GUEST},{OTHER_GUEST}')
     store = S.get_store()
     store.set_guest_token(GUEST, json.loads(_creds('tok-guest-1', 'r1', [GA]).to_json()))
     store.set_guest_token(OTHER_GUEST, json.loads(_creds('tok-guest-2', 'r2', [GA]).to_json()))
@@ -458,7 +434,6 @@ def test_contextvar_isolates_owner_and_guests_concurrently(monkeypatch):
 
 def test_http_concurrent_owner_and_guest_calls_isolated(client, monkeypatch):
     """The same through the real app: owner and guest requests at once over HTTP."""
-    monkeypatch.setenv('GUEST_EMAILS', GUEST)
     cb, gtok = sign_in(client, GUEST, '/analytics/mcp')
     cb, otok = sign_in(client, 'owner@example.com', '/analytics/mcp')  # narrow flow: keeps broad token
     guest_google = S.get_store().guest_token(GUEST)['token']

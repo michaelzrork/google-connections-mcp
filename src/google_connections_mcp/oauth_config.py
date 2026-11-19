@@ -90,7 +90,7 @@ def get_service_scopes(service_name):
 # ----------------------------------------------------------------------------
 # Guests on /analytics/mcp
 # ----------------------------------------------------------------------------
-# Invited people (GUEST_EMAILS) may connect their OWN Google account to the
+# Any Google account other than the owner's may connect ITSELF to the
 # analytics endpoint, and nothing else. Their sign-in asks Google for only
 # these scopes, so their token can't reach anything but Analytics even if a
 # check here were missed.
@@ -103,15 +103,3 @@ ANALYTICS_GUEST_SCOPES = [
     'https://www.googleapis.com/auth/analytics.readonly',
 ]
 
-
-def guest_emails() -> set:
-    """The invite list, read on every call so editing GUEST_EMAILS on Railway
-    (which restarts the service) or in a test takes effect at once.
-    Empty means no guests: today's owner-only behavior."""
-    import os
-    raw = os.environ.get('GUEST_EMAILS') or ''
-    return {e.strip().lower() for e in raw.split(',') if e.strip()}
-
-
-def is_invited_guest(email) -> bool:
-    return bool(email) and email.strip().lower() in guest_emails()

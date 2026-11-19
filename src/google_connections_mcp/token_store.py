@@ -14,8 +14,8 @@ What it holds:
   refresh      refresh tokens, same
   pending      sign-ins waiting on Google
   google_token the OWNER's Google credentials (refresh token included)
-  guests       invited guests' own Google credentials, by lowercase email
-               (only for /analytics/mcp; see GUEST_EMAILS). Kept beside
+  guests       guests' own Google credentials, by lowercase email (any
+               non-owner account, only for /analytics/mcp). Kept beside
                google_token, never in it, so the owner's token is untouched.
   connected_at when an AI app first connected through the new sign-in; the
                old open /sse endpoint switches itself off from then on
