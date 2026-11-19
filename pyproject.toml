@@ -37,6 +37,9 @@ markdown-drive-mcp = "google_connections_mcp.local_markdown:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+google_connections_mcp = ["icons/*"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",

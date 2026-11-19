@@ -21,6 +21,7 @@ from google_connections_mcp.auth_manager import get_auth_manager, create_oauth_f
 from google_connections_mcp.oauth_config import ANALYTICS_GUEST_PATH, ANALYTICS_GRANT
 from google_connections_mcp.mcp_oauth import GoogleOAuthProvider, MCP_SCOPE, public_url
 from google_connections_mcp.token_store import get_store
+from google_connections_mcp.site_icons import GENERAL as GENERAL_ICON, icon_routes, server_icons
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 
 # Get auth manager
@@ -54,6 +55,7 @@ oauth_provider = GoogleOAuthProvider(on_google_token=auth.set_credentials)
 mcp = FastMCP(
     "Google Connections MCP",
     instructions=INSTRUCTIONS,
+    icons=server_icons(public_url(), GENERAL_ICON),  # serverInfo icons (spec 2025-11-25)
     auth_server_provider=oauth_provider,
     auth=AuthSettings(
         issuer_url=public_url(),
@@ -4674,6 +4676,7 @@ def _product_server(slug: str, title: str, prefixes, instructions: str) -> FastM
     server = FastMCP(
         f"Google Connections: {title}",
         instructions=f"{instructions}\n\n{common}",
+        icons=server_icons(public_url(), slug),  # /icons/<slug>.png and .svg
         auth_server_provider=oauth_provider,
         auth=AuthSettings(
             issuer_url=public_url(),
@@ -4825,6 +4828,7 @@ def build_app():
         Route("/oauth/start", endpoint=start_oauth, methods=["GET"]),
         Route("/oauth/callback", endpoint=oauth_callback, methods=["GET"]),
         Route("/health", endpoint=health_check, methods=["GET"]),
+        *icon_routes(),  # /favicon.ico, /favicon.svg, /apple-touch-icon.png, /icons/*, /
     ])
     return app
 

@@ -105,6 +105,8 @@ Each user deploys their own instance with their own credentials - your data stay
 
 **One product per connector (optional):** besides `/mcp` (every tool), each product has its own address with only its tools: `/gmail/mcp`, `/calendar/mcp`, `/drive/mcp`, `/docs/mcp`, `/sheets/mcp`, `/tasks/mcp`, `/search-console/mcp`, `/analytics/mcp` and `/markdown/mcp`. Add any of them as its own connector the same way. They share one sign-in and one Google token, so connecting a second one asks you to sign in again but changes nothing else. Smaller toolsets help a lot with small local models, and an app only gets the products you give it. (Google itself grants the same permissions to all of them: the split is in which tools each address offers.)
 
+**Icons.** Each address has its own icon (an envelope for `/gmail/mcp`, a bar chart for `/analytics/mcp`, a hub for `/mcp`, and so on), offered two ways: in the MCP `serverInfo.icons` each address returns when an app connects (spec 2025-11-25; PNG at `/icons/<name>.png`, 256px, and SVG at `/icons/<name>.svg`, where `<name>` is the product slug or `google-connections` for `/mcp`), and as the site's favicon (`/favicon.ico`, `/favicon.svg`, `/apple-touch-icon.png`, linked from `/`), which is the `/mcp` icon because a favicon is one per domain. The art is original, not Google's product logos: the SVGs live in `src/google_connections_mcp/icons/`, and `NODE_PATH=$(npm root -g) node scripts/render_icons.js` re-renders the PNGs and `favicon.ico` after an edit (Playwright and ImageMagick). Whether an app shows them is up to the app. As of November 2026 Claude.ai doesn't read `serverInfo.icons` for custom connectors and picks the icon itself from the domain when the connector is added ([anthropics/claude-ai-mcp#152](https://github.com/anthropics/claude-ai-mcp/issues/152)). On a `*.up.railway.app` address that lookup lands on `railway.app`, so expect Railway's icon or a globe there; a custom domain (`PUBLIC_URL`) is what lets this server's favicon count.
+
 To grant new Google permissions later (after a scope is added to `oauth_config.py`), reconnect the connector: the sign-in asks for them.
 
 You're done!
@@ -417,6 +419,8 @@ On Windows use full paths (`C:\\Users\\you\\...`), and if `markdown-drive-mcp` i
 | `/.well-known/oauth-protected-resource/<path>`, `/.well-known/oauth-authorization-server` | OAuth discovery (one protected-resource document per endpoint) |
 | `/register`, `/authorize`, `/token`, `/revoke` | OAuth 2.1: client registration, sign-in, tokens, revocation |
 | `/oauth/callback` | Google's redirect back after sign-in |
+| `/icons/<name>.png`, `/icons/<name>.svg` | Each address's icon (`google-connections` for `/mcp`, else the product slug), no sign-in |
+| `/favicon.ico`, `/favicon.svg`, `/apple-touch-icon.png`, `/` | The site icon (same as `/mcp`'s) and a one-line page that links it |
 | `/health` | Status: Google signed in, the `/mcp` address, whether the old endpoints are open, whether storage is persistent |
 | `/sse`, `/messages/`, `/oauth/start` | Old setup, open until the first `/mcp` connection, then 410 |
 

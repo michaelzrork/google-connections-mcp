@@ -279,6 +279,16 @@ def test_owner_instructions_and_analytics_wording(client):
     assert 'your Google account' in ins and "owner's" not in ins
 
 
+def test_initialize_server_info_carries_each_endpoints_icon(client):
+    cb, tok = sign_in(client, 'owner@example.com', '/mcp')
+    hb = dict(H, Authorization='Bearer ' + tok['access_token'])
+    for path, name in [('/mcp', 'google-connections')] + [(f'/{s}/mcp', s) for s in PRODUCT_SLUGS]:
+        info = client.post(path, json=INIT, headers=hb).json()['result']['serverInfo']
+        srcs = [i['src'] for i in info['icons']]
+        assert srcs == [f'{BASE}/icons/{name}.png', f'{BASE}/icons/{name}.svg'], (path, info)
+        assert client.get(srcs[0]).status_code == 200
+
+
 # -- guests -----------------------------------------------------------------------
 def test_guest_gets_narrow_scopes_and_own_token(client, monkeypatch):
     owner_before = S.get_store().google_token()
